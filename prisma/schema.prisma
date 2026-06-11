@@ -1,0 +1,51 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+enum MovementStage {
+  PRE_CHARGE
+  AFTER_CHARGE
+  DELIVERY
+}
+
+model Battery {
+  id            String        @id @default(cuid())
+  code          String        @unique
+  label         String
+  chemistry     String?
+  capacityMah   Int?
+  nominalVolt   Float?
+  cycleCount    Int           @default(0)
+  healthPercent Int?
+  status        String        @default("IN_STOCK")
+  location      String?
+  notes         String?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+}
+
+model BatteryMovement {
+  id                String        @id @default(cuid())
+  stage             MovementStage
+  fromRack          String
+  fromSlot          String
+  batterySn         String
+  voltage           Float
+  voltageMeasuredAt DateTime?
+  toRack            String
+  toSlot            String
+  scanSource        String?
+  voltageSource     String?
+  deviceId          String?
+  notes             String?
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+
+  @@index([stage, createdAt])
+  @@index([batterySn, createdAt])
+}

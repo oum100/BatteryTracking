@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Battery Tracking Test QR</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #eef6d9;
+        --card: #ffffff;
+        --ink: #122014;
+        --muted: #5b6c5e;
+        --lime: #7dbb21;
+        --border: #d6e4bf;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        font-family: "SF Pro Display", "Segoe UI", sans-serif;
+        background:
+          radial-gradient(circle at top, rgba(190, 242, 100, 0.35), transparent 30%),
+          var(--bg);
+        color: var(--ink);
+      }
+
+      .wrap {
+        max-width: 1080px;
+        margin: 0 auto;
+        padding: 24px 18px 48px;
+      }
+
+      .hero {
+        display: grid;
+        gap: 10px;
+        margin-bottom: 20px;
+        padding: 18px;
+        background: rgba(255, 255, 255, 0.9);
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        box-shadow: 0 14px 34px rgba(15, 23, 42, 0.08);
+      }
+
+      .eyebrow {
+        display: inline-flex;
+        width: fit-content;
+        padding: 8px 12px;
+        border-radius: 999px;
+        background: #d9fb8b;
+        border: 1px solid #b8e84f;
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.2em;
+        text-transform: uppercase;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: clamp(28px, 4vw, 42px);
+        line-height: 0.95;
+      }
+
+      .lead {
+        margin: 0;
+        color: var(--muted);
+        font-size: 16px;
+      }
+
+      .section {
+        margin-top: 16px;
+      }
+
+      .section h2 {
+        margin: 0 0 10px;
+        font-size: 18px;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        gap: 14px;
+      }
+
+      .card {
+        padding: 14px;
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+      }
+
+      .tag {
+        display: inline-block;
+        margin-bottom: 8px;
+        padding: 6px 10px;
+        border-radius: 999px;
+        background: #eaf5d2;
+        color: #355117;
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+      }
+
+      .value {
+        margin: 0 0 10px;
+        font-size: 24px;
+        font-weight: 800;
+        line-height: 1.05;
+        word-break: break-word;
+      }
+
+      .note {
+        margin: 10px 0 0;
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      img {
+        display: block;
+        width: 100%;
+        aspect-ratio: 1 / 1;
+        background: #fff;
+        border-radius: 10px;
+      }
+
+      .tips {
+        margin-top: 18px;
+        padding: 14px 16px;
+        background: rgba(255, 255, 255, 0.85);
+        border: 1px solid var(--border);
+        border-radius: 16px;
+      }
+
+      .tips p {
+        margin: 6px 0;
+        color: var(--muted);
+      }
+
+      @media print {
+        body {
+          background: #fff;
+        }
+
+        .wrap {
+          max-width: none;
+          padding: 0;
+        }
+
+        .hero,
+        .tips,
+        .card {
+          box-shadow: none;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="wrap">
+      <section class="hero">
+        <div class="eyebrow">Test QR</div>
+        <h1>Battery Tracking QR Pack</h1>
+        <p class="lead">Open this page on your laptop or print it, then scan with the phone on <code>/battery-movement</code>.</p>
+      </section>
+
+      <section class="section">
+        <h2>From Rack / Slot</h2>
+        <div class="grid">
+          <article class="card">
+            <div class="tag">FROM</div>
+            <p class="value">STORE-A01:S01</p>
+            <img src="/test-qr/generated/stock-from-1.svg" alt="STORE-A01:S01 QR" />
+            <p class="note">Use for PRE_CHARGE source.</p>
+          </article>
+          <article class="card">
+            <div class="tag">FROM</div>
+            <p class="value">STORE-A02:S03</p>
+            <img src="/test-qr/generated/stock-from-2.svg" alt="STORE-A02:S03 QR" />
+            <p class="note">Alternate stock location.</p>
+          </article>
+          <article class="card">
+            <div class="tag">FROM</div>
+            <p class="value">DLV-C01:S01</p>
+            <img src="/test-qr/generated/delivery-from-1.svg" alt="DLV-C01:S01 QR" />
+            <p class="note">Use as delivery source.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>Battery S/N</h2>
+        <div class="grid">
+          <article class="card">
+            <div class="tag">BATTERY</div>
+            <p class="value">BAT-000123</p>
+            <img src="/test-qr/generated/battery-1.svg" alt="BAT-000123 QR" />
+            <p class="note">Primary test battery.</p>
+          </article>
+          <article class="card">
+            <div class="tag">BATTERY</div>
+            <p class="value">BAT-000456</p>
+            <img src="/test-qr/generated/battery-2.svg" alt="BAT-000456 QR" />
+            <p class="note">Second battery.</p>
+          </article>
+          <article class="card">
+            <div class="tag">BATTERY</div>
+            <p class="value">BAT-000789</p>
+            <img src="/test-qr/generated/battery-3.svg" alt="BAT-000789 QR" />
+            <p class="note">Third battery.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>To Rack / Slot</h2>
+        <div class="grid">
+          <article class="card">
+            <div class="tag">TO</div>
+            <p class="value">CHG-B01:S02</p>
+            <img src="/test-qr/generated/charge-to-1.svg" alt="CHG-B01:S02 QR" />
+            <p class="note">Use for PRE_CHARGE destination.</p>
+          </article>
+          <article class="card">
+            <div class="tag">TO</div>
+            <p class="value">CHG-B03:S04</p>
+            <img src="/test-qr/generated/charge-to-2.svg" alt="CHG-B03:S04 QR" />
+            <p class="note">Alternate charge rack.</p>
+          </article>
+          <article class="card">
+            <div class="tag">TO</div>
+            <p class="value">FORD-D01:S01</p>
+            <img src="/test-qr/generated/delivery-to-1.svg" alt="FORD-D01:S01 QR" />
+            <p class="note">Use for DELIVERY destination.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="tips">
+        <p>Quick test order: <strong>FROM</strong> → <strong>BATTERY</strong> → let STEP 3 read voltage → <strong>TO</strong>.</p>
+        <p>Useful URL: <code>/test-qr/</code></p>
+        <p>If you want more labels later, I can generate a larger rack set for stock, charge, and delivery zones.</p>
+      </section>
+    </main>
+  </body>
+</html>
