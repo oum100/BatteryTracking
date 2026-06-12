@@ -23,6 +23,7 @@ interface MovementRecord extends MovementDraft {
 }
 
 const STORAGE_KEY = 'battery-movement-v1-records'
+const COUNT_OFFSET_KEY = 'battery-movement-v1-count-offset'
 const API_ENDPOINT = '/api/battery-movements'
 const ESP32_ENDPOINT_KEY = 'battery-movement-v1-esp32-endpoint'
 const DEFAULT_ESP32_ENDPOINT = '/api/mock/esp32-voltage'
@@ -30,6 +31,7 @@ const DEVICE_ESP32_ENDPOINT = 'http://192.168.4.1/voltage'
 
 const video = useTemplateRef<HTMLVideoElement>('video')
 const canvas = useTemplateRef<HTMLCanvasElement>('canvas')
+const scannerInput = useTemplateRef<HTMLInputElement>('scannerInput')
 
 const stage = ref<MovementStage>('PRE_CHARGE')
 const scanField = ref<ScanField>('from')
@@ -59,6 +61,7 @@ const esp32StatusMessage = ref('Configure endpoint, then wait for STEP 3')
 const lastScanSource = ref<ScanSource | null>(null)
 const lastVoltageSource = ref<VoltageSource | null>(null)
 const log = ref('Start camera, scan with scanner gun, or use manual scan to begin a movement record.')
+const countOffset = ref(0)
 
 let mediaStream: MediaStream | null = null
 let detectorTimer: ReturnType<typeof setInterval> | null = null
@@ -67,6 +70,7 @@ let lastDetection = 0
 let audioContext: AudioContext | null = null
 let scannerBuffer = ''
 let scannerLastInputAt = 0
+let scannerInputTimer: ReturnType<typeof setTimeout> | null = null
 let esp32LastVoltage: number | null = null
 let esp32StableHits = 0
 
@@ -214,6 +218,30 @@ const workflowStepMeta = computed(() => {
   return map[workflowStep.value]
 })
 
+const esp32EndpointMode = computed<'mock' | 'device' | 'custom'>(() => {
+  if (esp32Endpoint.value === DEFAULT_ESP32_ENDPOINT) {
+    return 'mock'
+  }
+
+  if (esp32Endpoint.value === DEVICE_ESP32_ENDPOINT) {
+    return 'device'
+  }
+
+  return 'custom'
+})
+
+const esp32EndpointModeLabel = computed(() => {
+  if (esp32EndpointMode.value === 'mock') {
+    return 'Mock API'
+  }
+
+  if (esp32EndpointMode.value === 'device') {
+    return 'Device IP'
+  }
+
+  return 'Custom'
+})
+
 const canSave = computed(() => Boolean(
   draft.fromRack
   && draft.fromSlot
@@ -222,6 +250,8 @@ const canSave = computed(() => Boolean(
   && draft.toRack
   && draft.toSlot,
 ))
+
+const displayCount = computed(() => Math.max(records.value.length - countOffset.value, 0))
 
 const scanTargetLabel = computed(() => {
   if (scanField.value === 'from') {
@@ -497,6 +527,30 @@ function loadEsp32Endpoint() {
   }
 }
 
+function loadCountOffset() {
+  if (typeof localStorage === 'undefined') {
+    return
+  }
+
+  const raw = localStorage.getItem(COUNT_OFFSET_KEY)
+  const value = Number.parseInt(raw ?? '0', 10)
+  countOffset.value = Number.isFinite(value) ? value : 0
+}
+
+function saveCountOffset() {
+  if (typeof localStorage === 'undefined') {
+    return
+  }
+
+  localStorage.setItem(COUNT_OFFSET_KEY, String(countOffset.value))
+}
+
+function resetCount() {
+  countOffset.value = records.value.length
+  saveCountOffset()
+  log.value = 'Count reset for this device session'
+}
+
 function saveEsp32Endpoint() {
   if (typeof localStorage === 'undefined') {
     return
@@ -530,12 +584,22 @@ function resetDraft() {
   lastVoltageSource.value = null
 }
 
+function clearDraft() {
+  resetDraft()
+  stopEsp32Polling()
+  esp32LinkState.value = 'disconnected'
+  esp32StatusMessage.value = 'Draft cleared. Start with FROM rack/slot'
+  log.value = `Current ${stage.value} draft cleared`
+  focusScannerCapture()
+}
+
 function setStage(nextStage: MovementStage) {
   ensureAudioContext()
   stage.value = nextStage
   draft.stage = nextStage
   resetDraft()
   log.value = `Switched to ${nextStage}. Start with FROM rack/slot.`
+  focusScannerCapture()
 }
 
 function stopEsp32Polling() {
@@ -688,12 +752,31 @@ function startEsp32Polling() {
 function parseRackSlot(value: string) {
   const trimmed = value.trim().toUpperCase()
   const normalized = trimmed.replace(/\s+/g, '')
-  const parts = normalized.split(/[:|/@#_-]+/).filter(Boolean)
 
-  if (parts.length >= 2) {
+  const separators = [':', '|', '/', '@', '#']
+
+  for (const separator of separators) {
+    const separatorIndex = normalized.lastIndexOf(separator)
+
+    if (separatorIndex > 0 && separatorIndex < normalized.length - 1) {
+      const rack = normalized.slice(0, separatorIndex)
+      const slot = normalized.slice(separatorIndex + 1)
+
+      if (rack && slot) {
+        return {
+          rack,
+          slot,
+        }
+      }
+    }
+  }
+
+  const fallbackParts = normalized.split(/[:|/@#]+/).filter(Boolean)
+
+  if (fallbackParts.length >= 2) {
     return {
-      rack: parts[0],
-      slot: parts.slice(1).join('-'),
+      rack: fallbackParts.slice(0, -1).join('-'),
+      slot: fallbackParts.at(-1) ?? 'S01',
     }
   }
 
@@ -753,7 +836,9 @@ async function finalizeIfReady() {
     records.value.unshift(normalizeRecord(response.record))
     log.value = `Auto-saved ${stage.value} movement to DB for battery ${draft.batterySn}`
   }
-  catch {
+  catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown DB save error'
+
     const fallbackRecord: MovementRecord = {
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       stage: stage.value,
@@ -770,7 +855,7 @@ async function finalizeIfReady() {
 
     records.value.unshift(fallbackRecord)
     saveLocalFallbackRecords(records.value.filter(record => record.syncStatus === 'local'))
-    log.value = `DB save failed. Stored local fallback for battery ${draft.batterySn}`
+    log.value = `DB save failed for ${stage.value} battery ${draft.batterySn}: ${message}. Stored local fallback instead.`
   }
 
   playFlowCompleteFeedback()
@@ -825,11 +910,101 @@ function applyManualScan() {
   manualScanValue.value = ''
 }
 
+function shouldKeepScannerFocus(target?: EventTarget | null) {
+  const element = target as HTMLElement | null
+
+  if (!element) {
+    return true
+  }
+
+  const tagName = element.tagName
+
+  if (tagName === 'INPUT' || tagName === 'TEXTAREA' || tagName === 'SELECT') {
+    return false
+  }
+
+  if (element.isContentEditable) {
+    return false
+  }
+
+  return true
+}
+
+function focusScannerCapture() {
+  if (typeof window === 'undefined') {
+    return
+  }
+
+  window.setTimeout(() => {
+    scannerInput.value?.focus()
+  }, 0)
+}
+
+function flushScannerInputValue(rawValue: string) {
+  const value = rawValue.trim()
+
+  if (value.length < 3) {
+    return
+  }
+
+  applyScan(value, 'scanner')
+}
+
+function clearScannerInputBuffer() {
+  if (scannerInputTimer) {
+    clearTimeout(scannerInputTimer)
+    scannerInputTimer = null
+  }
+
+  if (scannerInput.value) {
+    scannerInput.value.value = ''
+  }
+}
+
+function handleScannerInput(event: Event) {
+  const target = event.target as HTMLInputElement | null
+  const value = target?.value ?? ''
+
+  if (scannerInputTimer) {
+    clearTimeout(scannerInputTimer)
+  }
+
+  scannerInputTimer = window.setTimeout(() => {
+    flushScannerInputValue(value)
+    clearScannerInputBuffer()
+  }, 120)
+}
+
+function handleScannerInputEnter(event: KeyboardEvent) {
+  const target = event.target as HTMLInputElement | null
+  const value = target?.value ?? ''
+
+  if (!value.trim()) {
+    return
+  }
+
+  event.preventDefault()
+  flushScannerInputValue(value)
+  clearScannerInputBuffer()
+}
+
+function handleWindowPointerFocus(event: Event) {
+  if (!shouldKeepScannerFocus(event.target)) {
+    return
+  }
+
+  focusScannerCapture()
+}
+
 function handleScannerKeydown(event: KeyboardEvent) {
   const target = event.target as HTMLElement | null
   const tagName = target?.tagName
 
-  if (tagName === 'INPUT' || tagName === 'TEXTAREA') {
+  if (target === scannerInput.value) {
+    return
+  }
+
+  if (tagName === 'INPUT' || tagName === 'TEXTAREA' || tagName === 'SELECT') {
     return
   }
 
@@ -969,6 +1144,7 @@ async function startCamera() {
 
     hasStarted.value = true
     log.value = 'Camera ready for scan'
+    focusScannerCapture()
 
     if ('BarcodeDetector' in window) {
       const detector = new window.BarcodeDetector({
@@ -1023,13 +1199,24 @@ async function startCamera() {
 onMounted(() => {
   void loadRecords()
   loadEsp32Endpoint()
+  loadCountOffset()
   draft.stage = stage.value
+  focusScannerCapture()
   window.addEventListener('keydown', handleScannerKeydown)
+  window.addEventListener('pointerdown', handleWindowPointerFocus)
+  window.addEventListener('focus', focusScannerCapture)
 })
 
 watch(esp32Endpoint, () => {
   saveEsp32Endpoint()
 })
+
+watch(records, () => {
+  if (countOffset.value > records.value.length) {
+    countOffset.value = records.value.length
+    saveCountOffset()
+  }
+}, { deep: true })
 
 watch(workflowStep, (nextStep) => {
   if (nextStep === 'voltage' && draft.voltage === null) {
@@ -1056,11 +1243,29 @@ onBeforeUnmount(() => {
   stopCamera()
   stopEsp32Polling()
   window.removeEventListener('keydown', handleScannerKeydown)
+  window.removeEventListener('pointerdown', handleWindowPointerFocus)
+  window.removeEventListener('focus', focusScannerCapture)
+
+  if (scannerInputTimer) {
+    clearTimeout(scannerInputTimer)
+  }
 })
 </script>
 
 <template>
   <main :class="['min-h-[100dvh] px-3 py-1 text-slate-950 transition-colors duration-300', workflowStepMeta.bg]">
+    <input
+      ref="scannerInput"
+      type="text"
+      autocomplete="off"
+      autocapitalize="off"
+      spellcheck="false"
+      inputmode="none"
+      class="pointer-events-none fixed -left-[9999px] top-0 h-0 w-0 opacity-0"
+      @input="handleScannerInput"
+      @keydown.enter="handleScannerInputEnter"
+    />
+
     <section class="mx-auto flex max-w-md flex-col gap-2">
       <UCard
         :ui="{
@@ -1081,7 +1286,7 @@ onBeforeUnmount(() => {
           <UBadge variant="soft" class="shrink-0 inline-flex items-center rounded-md border border-slate-200 bg-slate-50 px-3 py-1 text-right shadow-sm">
             <div class="flex items-center gap-2">
               <div class="text-md font-bold uppercase tracking-[0.18em] text-slate-500">Count</div>
-              <div class="text-lg font-bold leading-none text-slate-950">{{ records.length }}</div>
+              <div class="text-lg font-bold leading-none text-slate-950">{{ displayCount }}</div>
             </div>
           </UBadge>
         </div>
@@ -1201,7 +1406,13 @@ onBeforeUnmount(() => {
               <div class="mt-0.5 text-sm font-bold" :class="esp32Status.tone">{{ esp32Status.title }}</div>
               <div class="text-[11px] text-slate-600">{{ esp32Status.detail }}</div>
             </div>
-            <span class="shrink-0 rounded-md px-2 py-1 text-[11px] font-bold" :class="esp32Status.chip">LINK</span>
+            <span class="shrink-0 rounded-md px-2 py-1 text-[11px] font-bold" :class="esp32Status.chip">
+              {{ esp32EndpointModeLabel }}
+            </span>
+          </div>
+          <div class="mt-1 text-[11px] text-slate-600">
+            Endpoint mode:
+            <span class="font-semibold text-slate-950">{{ esp32EndpointModeLabel }}</span>
           </div>
           <div class="mt-1 text-[11px] text-slate-600">
             Last voltage source:
@@ -1218,20 +1429,24 @@ onBeforeUnmount(() => {
               <UButton
                 size="sm"
                 color="neutral"
-                variant="soft"
-                class="border border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+                :variant="esp32EndpointMode === 'mock' ? 'solid' : 'soft'"
+                :class="esp32EndpointMode === 'mock'
+                  ? 'border border-lime-800 bg-lime-800 text-white hover:bg-lime-700'
+                  : 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-50'"
                 @click="useMockEsp32Endpoint"
               >
-                Use Mock API
+                {{ esp32EndpointMode === 'mock' ? 'Using Mock API' : 'Use Mock API' }}
               </UButton>
               <UButton
                 size="sm"
                 color="neutral"
-                variant="soft"
-                class="border border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+                :variant="esp32EndpointMode === 'device' ? 'solid' : 'soft'"
+                :class="esp32EndpointMode === 'device'
+                  ? 'border border-sky-800 bg-sky-800 text-white hover:bg-sky-700'
+                  : 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-50'"
                 @click="useDeviceEsp32Endpoint"
               >
-                Use Device IP
+                {{ esp32EndpointMode === 'device' ? 'Using Device IP' : 'Use Device IP' }}
               </UButton>
             </div>
           </div>
@@ -1242,10 +1457,12 @@ onBeforeUnmount(() => {
             block
             size="lg"
             color="neutral"
-            variant="soft"
+            variant="solid"
             icon="i-lucide-camera"
             :loading="isStarting"
-            :class="hasStarted ? 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-50' : stageMeta.soft"
+            :class="hasStarted
+              ? 'border border-slate-800 bg-slate-800 text-white shadow-[0_10px_24px_rgba(15,23,42,0.18)] hover:bg-slate-700'
+              : 'border border-slate-900 bg-slate-900 text-white shadow-[0_10px_24px_rgba(15,23,42,0.18)] hover:bg-slate-800'"
             @click="startCamera"
           >
             {{ hasStarted ? 'Restart Camera' : 'Start Camera' }}
@@ -1253,6 +1470,28 @@ onBeforeUnmount(() => {
         </div>
 
         <div class="mt-2 grid grid-cols-1 gap-1">
+          <UButton
+            block
+            size="lg"
+            color="neutral"
+            variant="soft"
+            class="border border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+            @click="resetCount"
+          >
+            Reset Count
+          </UButton>
+
+          <UButton
+            block
+            size="lg"
+            color="neutral"
+            variant="soft"
+            class="border border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+            @click="clearDraft"
+          >
+            Clear Draft
+          </UButton>
+
           <UButton
             block
             size="lg"
