@@ -1,9 +1,10 @@
 import { prisma } from '../../utils/prisma'
 
-type MovementStage = 'PRE_CHARGE' | 'AFTER_CHARGE' | 'DELIVERY'
+type MovementOperation = 'STOCK_TO_CHARGE' | 'CHARGE_TO_DELIVERY' | 'DELIVERY_TRANSFER'
 
 interface MovementPayload {
-  stage?: MovementStage
+  operation?: MovementOperation
+  stage?: string
   fromRack?: string
   fromSlot?: string
   batterySn?: string
@@ -30,17 +31,22 @@ function ensureText(value: unknown, field: string) {
   return text
 }
 
-function ensureStage(value: unknown) {
-  const stage = String(value ?? '').trim() as MovementStage
+function ensureOperation(value: unknown) {
+  const operation = String(value ?? '').trim()
+  const normalized = {
+    PRE_CHARGE: 'STOCK_TO_CHARGE',
+    AFTER_CHARGE: 'CHARGE_TO_DELIVERY',
+    DELIVERY: 'DELIVERY_TRANSFER',
+  }[operation] ?? operation
 
-  if (!['PRE_CHARGE', 'AFTER_CHARGE', 'DELIVERY'].includes(stage)) {
+  if (!['STOCK_TO_CHARGE', 'CHARGE_TO_DELIVERY', 'DELIVERY_TRANSFER'].includes(normalized)) {
     throw createError({
       statusCode: 400,
-      statusMessage: 'stage is invalid',
+      statusMessage: 'operation is invalid',
     })
   }
 
-  return stage
+  return normalized as MovementOperation
 }
 
 function ensureVoltage(value: unknown) {
@@ -71,7 +77,7 @@ export default defineEventHandler(async (event) => {
   const record = await prisma.batteryMovement.update({
     where: { id },
     data: {
-      stage: ensureStage(body.stage),
+      stage: ensureOperation(body.operation ?? body.stage),
       fromRack: ensureText(body.fromRack, 'fromRack'),
       fromSlot: ensureText(body.fromSlot, 'fromSlot'),
       batterySn: ensureText(body.batterySn, 'batterySn'),

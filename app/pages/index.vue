@@ -1,3 +1,38 @@
+<script setup lang="ts">
+const workspaceLinks = [
+  {
+    label: 'Battery Movement V2',
+    path: '/battery-movement',
+    className: 'justify-between rounded-2xl bg-lime-600 px-5 py-5 text-left text-lg font-bold text-white hover:bg-lime-700',
+  },
+  {
+    label: 'Mobile History',
+    path: '/movement-history',
+    className: 'justify-between rounded-2xl bg-slate-800 px-5 py-5 text-left text-lg font-bold text-white hover:bg-slate-900',
+  },
+  {
+    label: 'Desktop History',
+    path: '/movement-desktop',
+    className: 'justify-between rounded-2xl bg-slate-800 px-5 py-5 text-left text-lg font-bold text-white hover:bg-slate-900',
+  },
+] as const
+
+function getWorkspaceHref(path: string) {
+  if (typeof window === 'undefined') {
+    return path
+  }
+
+  const url = new URL(path, window.location.origin)
+  const isAndroid = /Android/i.test(window.navigator.userAgent)
+
+  if (!isAndroid) {
+    return url.toString()
+  }
+
+  return `intent://${url.host}${url.pathname}${url.search}${url.hash}#Intent;scheme=${url.protocol.replace(':', '')};package=com.android.chrome;end`
+}
+</script>
+
 <template>
   <main class="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(217,249,157,0.5),_transparent_42%),linear-gradient(180deg,_#f7faef_0%,_#eef4e1_100%)] px-6 py-8 sm:px-8">
     <div class="mx-auto flex min-h-[calc(100vh-4rem)] w-full max-w-3xl items-center">
@@ -26,12 +61,15 @@
 
           <div class="grid gap-4">
             <UButton
-              to="/battery-movement"
+              v-for="link in workspaceLinks"
+              :key="link.path"
+              :href="getWorkspaceHref(link.path)"
+              external
               block
               size="xl"
               color="neutral"
               variant="solid"
-              class="justify-between rounded-2xl bg-lime-600 px-5 py-5 text-left text-lg font-bold text-white hover:bg-lime-700"
+              :class="link.className"
               :ui="{
                 base: 'w-full justify-between',
                 leadingIcon: 'text-white',
@@ -39,43 +77,7 @@
                 label: 'text-white font-bold text-lg'
               }"
             >
-              <span>Battery Movement V2</span>
-              <UIcon name="i-lucide-arrow-right" class="size-6 shrink-0 text-white" />
-            </UButton>
-
-            <UButton
-              to="/movement-history"
-              block
-              size="xl"
-              color="neutral"
-              variant="solid"
-              class="justify-between rounded-2xl bg-slate-800 px-5 py-5 text-left text-lg font-bold text-white hover:bg-slate-900"
-              :ui="{
-                base: 'w-full justify-between',
-                leadingIcon: 'text-white',
-                trailingIcon: 'text-white',
-                label: 'text-white font-bold text-lg'
-              }"
-            >
-              <span>Mobile History</span>
-              <UIcon name="i-lucide-arrow-right" class="size-6 shrink-0 text-white" />
-            </UButton>
-
-            <UButton
-              to="/movement-desktop"
-              block
-              size="xl"
-              color="neutral"
-              variant="solid"
-              class="justify-between rounded-2xl bg-slate-800 px-5 py-5 text-left text-lg font-bold text-white hover:bg-slate-900"
-              :ui="{
-                base: 'w-full justify-between',
-                leadingIcon: 'text-white',
-                trailingIcon: 'text-white',
-                label: 'text-white font-bold text-lg'
-              }"
-            >
-              <span>Desktop History</span>
+              <span>{{ link.label }}</span>
               <UIcon name="i-lucide-arrow-right" class="size-6 shrink-0 text-white" />
             </UButton>
           </div>

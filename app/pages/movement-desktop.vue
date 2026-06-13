@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import { CalendarDate, Time } from '@internationalized/date'
 
-type MovementStage = 'PRE_CHARGE' | 'AFTER_CHARGE' | 'DELIVERY'
+type MovementOperation = 'STOCK_TO_CHARGE' | 'CHARGE_TO_DELIVERY' | 'DELIVERY_TRANSFER'
 
 interface MovementRecord {
   id: string
-  stage: MovementStage
+  operation: MovementOperation
   fromRack: string
   fromSlot: string
   batterySn: string
@@ -23,7 +23,7 @@ interface MovementRecord {
 
 interface MovementForm {
   id: string | null
-  stage: MovementStage
+  operation: MovementOperation
   fromRack: string
   fromSlot: string
   batterySn: string
@@ -41,9 +41,10 @@ const API_ENDPOINT = '/api/battery-movements'
 const RACKS_ENDPOINT = '/api/battery-movements/racks'
 
 const search = ref('')
+const batteryFilter = ref<string | undefined>()
 const fromRackFilter = ref<string | undefined>()
 const toRackFilter = ref<string | undefined>()
-const selectedStage = ref<'ALL' | MovementStage>('ALL')
+const selectedOperation = ref<'ALL' | MovementOperation>('ALL')
 const startDateValue = ref<CalendarDate>()
 const startTimeValue = ref<Time>()
 const endDateValue = ref<CalendarDate>()
@@ -55,22 +56,22 @@ const loadError = ref('')
 const formError = ref('')
 const editorOpen = ref(false)
 
-const stageOptions = [
+const operationOptions = [
   { label: 'All', value: 'ALL' },
-  { label: 'Pre-charge', value: 'PRE_CHARGE' },
-  { label: 'After-charge', value: 'AFTER_CHARGE' },
-  { label: 'Delivery', value: 'DELIVERY' },
+  { label: 'Stock to Charge', value: 'STOCK_TO_CHARGE' },
+  { label: 'Charge to Delivery', value: 'CHARGE_TO_DELIVERY' },
+  { label: 'Delivery Transfer', value: 'DELIVERY_TRANSFER' },
 ] as const
 
-const stageMeta: Record<MovementStage, { badge: string }> = {
-  PRE_CHARGE: { badge: 'bg-lime-100 text-lime-950 ring-lime-300/80' },
-  AFTER_CHARGE: { badge: 'bg-emerald-100 text-emerald-950 ring-emerald-300/80' },
-  DELIVERY: { badge: 'bg-sky-100 text-sky-950 ring-sky-300/80' },
+const operationMeta: Record<MovementOperation, { badge: string }> = {
+  STOCK_TO_CHARGE: { badge: 'bg-lime-100 text-lime-950 ring-lime-300/80' },
+  CHARGE_TO_DELIVERY: { badge: 'bg-emerald-100 text-emerald-950 ring-emerald-300/80' },
+  DELIVERY_TRANSFER: { badge: 'bg-sky-100 text-sky-950 ring-sky-300/80' },
 }
 
 const emptyForm = (): MovementForm => ({
   id: null,
-  stage: 'PRE_CHARGE',
+  operation: 'STOCK_TO_CHARGE',
   fromRack: '',
   fromSlot: '',
   batterySn: '',
@@ -86,15 +87,39 @@ const emptyForm = (): MovementForm => ({
 
 const form = reactive<MovementForm>(emptyForm())
 
-const { data, pending, refresh } = await useFetch<{ ok: boolean, records: MovementRecord[] }>(API_ENDPOINT, {
+const { data, pending, refresh } = await useFetch<{ ok: boolean, records: Array<MovementRecord & { stage?: string }> }>(API_ENDPOINT, {
   default: () => ({ ok: true, records: [] }),
 })
+
+function normalizeOperation(value?: string) {
+  const normalized = {
+    PRE_CHARGE: 'STOCK_TO_CHARGE',
+    AFTER_CHARGE: 'CHARGE_TO_DELIVERY',
+    DELIVERY: 'DELIVERY_TRANSFER',
+  }[String(value ?? '').trim()] ?? String(value ?? '').trim()
+
+  if (!['STOCK_TO_CHARGE', 'CHARGE_TO_DELIVERY', 'DELIVERY_TRANSFER'].includes(normalized)) {
+    return 'STOCK_TO_CHARGE' as MovementOperation
+  }
+
+  return normalized as MovementOperation
+}
 
 const { data: racksData, refresh: refreshRacks } = await useFetch<{ ok: boolean, racks: string[] }>(RACKS_ENDPOINT, {
   default: () => ({ ok: true, racks: [] }),
 })
 
-const records = computed(() => data.value?.records ?? [])
+const records = computed<MovementRecord[]>(() => (data.value?.records ?? []).map(record => ({
+  ...record,
+  operation: normalizeOperation(record.operation ?? record.stage),
+})))
+const batteryOptions = computed(() => {
+  const values = Array.from(new Set(records.value.map(record => record.batterySn).filter(Boolean)))
+  return values.map(battery => ({
+    label: battery,
+    value: battery,
+  }))
+})
 const rackOptions = computed(() => (racksData.value?.racks ?? []).map(rack => ({
   label: rack,
   value: rack,
@@ -107,13 +132,18 @@ const endDateLabel = computed(() => formatFilterDisplay(endDateValue.value, endT
 
 const filteredRecords = computed(() => {
   const query = search.value.trim().toLowerCase()
+  const batteryQuery = batteryFilter.value?.trim().toLowerCase() ?? ''
   const fromRackQuery = fromRackFilter.value?.trim().toLowerCase() ?? ''
   const toRackQuery = toRackFilter.value?.trim().toLowerCase() ?? ''
   const start = startDateTime.value ? new Date(startDateTime.value).getTime() : null
   const end = endDateTime.value ? new Date(endDateTime.value).getTime() : null
 
   return records.value.filter((record) => {
-    if (selectedStage.value !== 'ALL' && record.stage !== selectedStage.value) {
+    if (selectedOperation.value !== 'ALL' && record.operation !== selectedOperation.value) {
+      return false
+    }
+
+    if (batteryQuery && !record.batterySn.toLowerCase().includes(batteryQuery)) {
       return false
     }
 
@@ -143,7 +173,7 @@ const filteredRecords = computed(() => {
       record.fromSlot,
       record.toRack,
       record.toSlot,
-      record.stage,
+      record.operation,
       record.scanSource ?? '',
       record.voltageSource ?? '',
       record.deviceId ?? '',
@@ -244,6 +274,16 @@ function clearDateFilter(kind: 'start' | 'end') {
   endTimeValue.value = undefined
 }
 
+function getOperationLabel(operation: MovementOperation) {
+  const labels: Record<MovementOperation, string> = {
+    STOCK_TO_CHARGE: 'Stock to Charge',
+    CHARGE_TO_DELIVERY: 'Charge to Delivery',
+    DELIVERY_TRANSFER: 'Delivery Transfer',
+  }
+
+  return labels[operation]
+}
+
 function resetForm() {
   Object.assign(form, emptyForm())
   formError.value = ''
@@ -257,7 +297,7 @@ function openCreate() {
 function openEdit(record: MovementRecord) {
   Object.assign(form, {
     id: record.id,
-    stage: record.stage,
+    operation: record.operation,
     fromRack: record.fromRack,
     fromSlot: record.fromSlot,
     batterySn: record.batterySn,
@@ -295,7 +335,7 @@ async function saveRecord() {
 
   try {
     const payload = {
-      stage: form.stage,
+      operation: form.operation,
       fromRack: form.fromRack,
       fromSlot: form.fromSlot,
       batterySn: form.batterySn,
@@ -357,7 +397,7 @@ async function deleteRecord(id: string) {
 async function exportExcel() {
   const XLSX = await import('xlsx')
   const rows = filteredRecords.value.map(record => ({
-    Stage: record.stage,
+    Operation: getOperationLabel(record.operation),
     BatterySN: record.batterySn,
     FromRack: record.fromRack,
     FromSlot: record.fromSlot,
@@ -397,7 +437,7 @@ async function exportPdf() {
   autoTable(doc, {
     startY: 72,
     head: [[
-      'Stage',
+      'Operation',
       'Battery',
       'From',
       'To',
@@ -407,7 +447,7 @@ async function exportPdf() {
       'Created',
     ]],
     body: filteredRecords.value.map(record => ([
-      record.stage,
+      getOperationLabel(record.operation),
       record.batterySn,
       `${record.fromRack}/${record.fromSlot}`,
       `${record.toRack}/${record.toSlot}`,
@@ -466,21 +506,44 @@ async function exportPdf() {
       <UCard
         :ui="{
           root: 'rounded-md ring-0 bg-white/90 shadow-[0_14px_32px_rgba(15,23,42,0.06)]',
-          body: 'p-5',
+          body: 'p-4',
         }"
       >
-        <div class="grid gap-4 xl:grid-cols-[1.15fr_0.8fr_0.8fr_0.9fr_0.9fr]">
-          <UFormField label="Search" name="search" :ui="{ label: 'text-sm font-semibold text-slate-700' }">
+        <div class="grid gap-3 lg:grid-cols-[1.2fr_0.95fr_0.85fr_0.85fr_1fr_1fr]">
+          <UFormField label="Search" name="search" :ui="{ label: 'text-xs font-semibold text-slate-700' }">
             <UInput
               v-model="search"
               leading-icon="i-lucide-search"
-              size="xl"
+              size="lg"
               placeholder="Battery, device, note"
-              :ui="{ base: 'min-h-11 bg-white text-sm text-slate-950 placeholder:text-slate-500', leadingIcon: 'text-slate-500' }"
+              :ui="{ base: 'min-h-10 bg-white text-sm text-slate-950 placeholder:text-slate-500', leadingIcon: 'text-slate-500' }"
             />
           </UFormField>
 
-          <UFormField label="From Rack" name="from-rack-filter" :ui="{ label: 'text-sm font-semibold text-slate-700' }">
+          <UFormField label="Battery" name="battery-filter" :ui="{ label: 'text-xs font-semibold text-slate-700' }">
+            <USelectMenu
+              v-model="batteryFilter"
+              :items="batteryOptions"
+              value-key="value"
+              label-key="label"
+              searchable
+              clear
+              leading-icon="i-lucide-battery-full"
+              size="lg"
+              placeholder="Select battery S/N"
+              :search-input="{ placeholder: 'Search battery S/N...' }"
+              :ui="{
+                base: 'min-h-10 bg-white text-sm text-slate-950',
+                leadingIcon: 'text-slate-500',
+                placeholder: 'text-slate-500',
+                value: 'text-slate-950',
+                content: 'bg-white',
+                item: 'text-slate-800'
+              }"
+            />
+          </UFormField>
+
+          <UFormField label="From Rack" name="from-rack-filter" :ui="{ label: 'text-xs font-semibold text-slate-700' }">
             <USelectMenu
               v-model="fromRackFilter"
               :items="rackOptions"
@@ -489,11 +552,11 @@ async function exportPdf() {
               searchable
               clear
               leading-icon="i-lucide-map-pinned"
-              size="xl"
+              size="lg"
               placeholder="Select from rack"
               :search-input="{ placeholder: 'Search from rack...' }"
               :ui="{
-                base: 'min-h-11 bg-white text-sm text-slate-950',
+                base: 'min-h-10 bg-white text-sm text-slate-950',
                 leadingIcon: 'text-slate-500',
                 placeholder: 'text-slate-500',
                 value: 'text-slate-950',
@@ -503,7 +566,7 @@ async function exportPdf() {
             />
           </UFormField>
 
-          <UFormField label="To Rack" name="to-rack-filter" :ui="{ label: 'text-sm font-semibold text-slate-700' }">
+          <UFormField label="To Rack" name="to-rack-filter" :ui="{ label: 'text-xs font-semibold text-slate-700' }">
             <USelectMenu
               v-model="toRackFilter"
               :items="rackOptions"
@@ -512,11 +575,11 @@ async function exportPdf() {
               searchable
               clear
               leading-icon="i-lucide-map-pinned"
-              size="xl"
+              size="lg"
               placeholder="Select to rack"
               :search-input="{ placeholder: 'Search to rack...' }"
               :ui="{
-                base: 'min-h-11 bg-white text-sm text-slate-950',
+                base: 'min-h-10 bg-white text-sm text-slate-950',
                 leadingIcon: 'text-slate-500',
                 placeholder: 'text-slate-500',
                 value: 'text-slate-950',
@@ -526,12 +589,12 @@ async function exportPdf() {
             />
           </UFormField>
 
-          <UFormField label="From Date Time" name="from-date-time" :ui="{ label: 'text-sm font-semibold text-slate-700' }">
+          <UFormField label="From Date Time" name="from-date-time" :ui="{ label: 'text-xs font-semibold text-slate-700' }">
             <UPopover :content="{ align: 'start', side: 'bottom', sideOffset: 8 }">
               <UButton
                 color="neutral"
                 variant="outline"
-                class="h-11 w-full justify-between rounded-md border-slate-300 bg-white px-3 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                class="h-10 w-full justify-between rounded-md border-slate-300 bg-white px-3 text-sm font-medium text-slate-700 hover:bg-slate-50"
               >
                 <span :class="startDateValue ? 'text-slate-950' : 'text-slate-500'">
                   {{ startDateLabel }}
@@ -568,12 +631,12 @@ async function exportPdf() {
             </UPopover>
           </UFormField>
 
-          <UFormField label="To Date Time" name="to-date-time" :ui="{ label: 'text-sm font-semibold text-slate-700' }">
+          <UFormField label="To Date Time" name="to-date-time" :ui="{ label: 'text-xs font-semibold text-slate-700' }">
             <UPopover :content="{ align: 'start', side: 'bottom', sideOffset: 8 }">
               <UButton
                 color="neutral"
                 variant="outline"
-                class="h-11 w-full justify-between rounded-md border-slate-300 bg-white px-3 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                class="h-10 w-full justify-between rounded-md border-slate-300 bg-white px-3 text-sm font-medium text-slate-700 hover:bg-slate-50"
               >
                 <span :class="endDateValue ? 'text-slate-950' : 'text-slate-500'">
                   {{ endDateLabel }}
@@ -613,13 +676,13 @@ async function exportPdf() {
 
         <div class="mt-3 flex flex-wrap gap-2">
           <UButton
-            v-for="option in stageOptions"
+            v-for="option in operationOptions"
             :key="option.value"
             size="sm"
             color="neutral"
             variant="soft"
-            :class="selectedStage === option.value ? 'bg-slate-900 text-white hover:bg-slate-800' : 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-50'"
-            @click="selectedStage = option.value"
+            :class="selectedOperation === option.value ? 'bg-slate-900 text-white hover:bg-slate-800' : 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-50'"
+            @click="selectedOperation = option.value"
           >
             {{ option.label }}
           </UButton>
@@ -686,12 +749,12 @@ async function exportPdf() {
           <UInput v-model="form.voltageMeasuredAt" type="datetime-local" :ui="{ base: '!min-h-11 !bg-white !px-3 !py-2 !text-sm !text-slate-950' }" />
           <div class="md:col-span-2 grid grid-cols-3 gap-2">
             <UButton
-              v-for="option in stageOptions.filter(option => option.value !== 'ALL')"
+              v-for="option in operationOptions.filter(option => option.value !== 'ALL')"
               :key="option.value"
               color="neutral"
               variant="soft"
-              :class="form.stage === option.value ? 'bg-slate-900 text-white hover:bg-slate-800' : 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-50'"
-              @click="form.stage = option.value"
+              :class="form.operation === option.value ? 'bg-slate-900 text-white hover:bg-slate-800' : 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-50'"
+              @click="form.operation = option.value"
             >
               {{ option.label }}
             </UButton>
@@ -730,7 +793,7 @@ async function exportPdf() {
           <table class="min-w-full text-sm">
             <thead class="bg-slate-950 text-white">
               <tr>
-                <th class="px-3 py-3 text-left font-bold">Stage</th>
+                <th class="px-3 py-3 text-left font-bold">Operation</th>
                 <th class="px-3 py-3 text-left font-bold">Battery</th>
                 <th class="px-3 py-3 text-left font-bold">From</th>
                 <th class="px-3 py-3 text-left font-bold">To</th>
@@ -758,8 +821,8 @@ async function exportPdf() {
                 class="border-b border-slate-200 align-top hover:bg-slate-50/80"
               >
                 <td class="px-3 py-3">
-                  <UBadge class="rounded-md px-2.5 py-1 text-[11px] font-bold uppercase tracking-[0.16em] ring-1" :class="stageMeta[record.stage].badge">
-                    {{ record.stage }}
+                  <UBadge class="rounded-md px-2.5 py-1 text-[11px] font-bold uppercase tracking-[0.16em] ring-1" :class="operationMeta[record.operation].badge">
+                    {{ getOperationLabel(record.operation) }}
                   </UBadge>
                 </td>
                 <td class="px-3 py-3">

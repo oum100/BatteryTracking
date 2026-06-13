@@ -1,9 +1,9 @@
 <script setup lang="ts">
-type MovementStage = 'PRE_CHARGE' | 'AFTER_CHARGE' | 'DELIVERY'
+type MovementOperation = 'STOCK_TO_CHARGE' | 'CHARGE_TO_DELIVERY' | 'DELIVERY_TRANSFER'
 
 interface MovementRecord {
   id: string
-  stage: MovementStage
+  operation: MovementOperation
   fromRack: string
   fromSlot: string
   batterySn: string
@@ -22,43 +22,58 @@ interface MovementRecord {
 
 const STORAGE_KEY = 'battery-movement-v1-records'
 const search = ref('')
-const selectedStage = ref<'ALL' | MovementStage>('ALL')
+const selectedOperation = ref<'ALL' | MovementOperation>('ALL')
 const isRefreshing = ref(false)
 const loadError = ref('')
 const localFallbackRecords = ref<MovementRecord[]>([])
 
-const stageOptions = [
+const operationOptions = [
   { label: 'All', value: 'ALL' },
-  { label: 'Pre-charge', value: 'PRE_CHARGE' },
-  { label: 'After-charge', value: 'AFTER_CHARGE' },
-  { label: 'Delivery', value: 'DELIVERY' },
+  { label: 'Stock to Charge', value: 'STOCK_TO_CHARGE' },
+  { label: 'Charge to Delivery', value: 'CHARGE_TO_DELIVERY' },
+  { label: 'Delivery Transfer', value: 'DELIVERY_TRANSFER' },
 ] as const
 
-const stageMeta: Record<MovementStage, { badge: string, card: string, chip: string }> = {
-  PRE_CHARGE: {
+const operationMeta: Record<MovementOperation, { badge: string, card: string, chip: string }> = {
+  STOCK_TO_CHARGE: {
     badge: 'bg-lime-100 text-lime-950 ring-lime-300/80',
     card: 'bg-lime-50/85',
     chip: 'bg-lime-200 text-lime-950',
   },
-  AFTER_CHARGE: {
+  CHARGE_TO_DELIVERY: {
     badge: 'bg-emerald-100 text-emerald-950 ring-emerald-300/80',
     card: 'bg-emerald-50/85',
     chip: 'bg-emerald-200 text-emerald-950',
   },
-  DELIVERY: {
+  DELIVERY_TRANSFER: {
     badge: 'bg-sky-100 text-sky-950 ring-sky-300/80',
     card: 'bg-sky-50/85',
     chip: 'bg-sky-200 text-sky-950',
   },
 }
 
-const { data, pending, refresh } = await useFetch<{ ok: boolean, records: MovementRecord[] }>('/api/battery-movements', {
+const { data, pending, refresh } = await useFetch<{ ok: boolean, records: Array<MovementRecord & { stage?: string }> }>('/api/battery-movements', {
   default: () => ({ ok: true, records: [] }),
 })
+
+function normalizeOperation(value?: string) {
+  const normalized = {
+    PRE_CHARGE: 'STOCK_TO_CHARGE',
+    AFTER_CHARGE: 'CHARGE_TO_DELIVERY',
+    DELIVERY: 'DELIVERY_TRANSFER',
+  }[String(value ?? '').trim()] ?? String(value ?? '').trim()
+
+  if (!['STOCK_TO_CHARGE', 'CHARGE_TO_DELIVERY', 'DELIVERY_TRANSFER'].includes(normalized)) {
+    return 'STOCK_TO_CHARGE' as MovementOperation
+  }
+
+  return normalized as MovementOperation
+}
 
 const records = computed<MovementRecord[]>(() => {
   const dbRecords = (data.value?.records ?? []).map(record => ({
     ...record,
+    operation: normalizeOperation(record.operation ?? record.stage),
     syncStatus: 'db' as const,
   }))
 
@@ -81,9 +96,9 @@ const filteredRecords = computed(() => {
   const query = search.value.trim().toLowerCase()
 
   return records.value.filter((record) => {
-    const matchesStage = selectedStage.value === 'ALL' || record.stage === selectedStage.value
+    const matchesOperation = selectedOperation.value === 'ALL' || record.operation === selectedOperation.value
 
-    if (!matchesStage) {
+    if (!matchesOperation) {
       return false
     }
 
@@ -97,7 +112,7 @@ const filteredRecords = computed(() => {
       record.fromSlot,
       record.toRack,
       record.toSlot,
-      record.stage,
+      record.operation,
       record.scanSource ?? '',
       record.voltageSource ?? '',
       record.deviceId ?? '',
@@ -109,11 +124,11 @@ const filteredRecords = computed(() => {
 
 const totalCount = computed(() => records.value.length)
 
-const stageCounts = computed(() => {
+const operationCounts = computed(() => {
   return {
-    PRE_CHARGE: records.value.filter(record => record.stage === 'PRE_CHARGE').length,
-    AFTER_CHARGE: records.value.filter(record => record.stage === 'AFTER_CHARGE').length,
-    DELIVERY: records.value.filter(record => record.stage === 'DELIVERY').length,
+    STOCK_TO_CHARGE: records.value.filter(record => record.operation === 'STOCK_TO_CHARGE').length,
+    CHARGE_TO_DELIVERY: records.value.filter(record => record.operation === 'CHARGE_TO_DELIVERY').length,
+    DELIVERY_TRANSFER: records.value.filter(record => record.operation === 'DELIVERY_TRANSFER').length,
   }
 })
 
@@ -144,8 +159,9 @@ function loadLocalFallbackRecords() {
     const parsed = raw ? JSON.parse(raw) : []
 
     localFallbackRecords.value = Array.isArray(parsed)
-      ? parsed.map((record: any) => ({
+          ? parsed.map((record: any) => ({
           ...record,
+          operation: normalizeOperation(record.operation ?? record.stage),
           syncStatus: 'local' as const,
         }))
       : []
@@ -164,6 +180,16 @@ function formatDateTime(value: string | null) {
     dateStyle: 'short',
     timeStyle: 'short',
   }).format(new Date(value))
+}
+
+function getOperationLabel(operation: MovementOperation) {
+  const labels: Record<MovementOperation, string> = {
+    STOCK_TO_CHARGE: 'Stock to Charge',
+    CHARGE_TO_DELIVERY: 'Charge to Delivery',
+    DELIVERY_TRANSFER: 'Delivery Transfer',
+  }
+
+  return labels[operation]
 }
 
 onMounted(() => {
@@ -206,16 +232,16 @@ onMounted(() => {
 
       <div class="grid grid-cols-3 gap-2">
         <UCard :ui="{ root: 'rounded-md ring-0 bg-white/85 shadow-sm', body: 'px-2 py-2 text-center' }">
-          <div class="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-500">Pre</div>
-          <div class="mt-1 text-lg font-black text-slate-950">{{ stageCounts.PRE_CHARGE }}</div>
+          <div class="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-500">Stock</div>
+          <div class="mt-1 text-lg font-black text-slate-950">{{ operationCounts.STOCK_TO_CHARGE }}</div>
         </UCard>
         <UCard :ui="{ root: 'rounded-md ring-0 bg-white/85 shadow-sm', body: 'px-2 py-2 text-center' }">
-          <div class="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-500">After</div>
-          <div class="mt-1 text-lg font-black text-slate-950">{{ stageCounts.AFTER_CHARGE }}</div>
+          <div class="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-500">Charge</div>
+          <div class="mt-1 text-lg font-black text-slate-950">{{ operationCounts.CHARGE_TO_DELIVERY }}</div>
         </UCard>
         <UCard :ui="{ root: 'rounded-md ring-0 bg-white/85 shadow-sm', body: 'px-2 py-2 text-center' }">
-          <div class="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-500">Delivery</div>
-          <div class="mt-1 text-lg font-black text-slate-950">{{ stageCounts.DELIVERY }}</div>
+          <div class="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-500">Transfer</div>
+          <div class="mt-1 text-lg font-black text-slate-950">{{ operationCounts.DELIVERY_TRANSFER }}</div>
         </UCard>
       </div>
 
@@ -235,14 +261,14 @@ onMounted(() => {
 
           <div class="grid grid-cols-4 gap-1">
             <UButton
-              v-for="option in stageOptions"
+              v-for="option in operationOptions"
               :key="option.value"
               size="sm"
               block
               color="neutral"
               variant="soft"
-              :class="selectedStage === option.value ? 'bg-slate-900 text-white hover:bg-slate-800' : 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-50'"
-              @click="selectedStage = option.value"
+              :class="selectedOperation === option.value ? 'bg-slate-900 text-white hover:bg-slate-800' : 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-50'"
+              @click="selectedOperation = option.value"
             >
               {{ option.label }}
             </UButton>
@@ -305,15 +331,15 @@ onMounted(() => {
           v-for="record in filteredRecords"
           :key="record.id"
           :ui="{
-            root: `rounded-md ring-0 shadow-[0_12px_28px_rgba(15,23,42,0.07)] ${stageMeta[record.stage].card}`,
+            root: `rounded-md ring-0 shadow-[0_12px_28px_rgba(15,23,42,0.07)] ${operationMeta[record.operation].card}`,
             body: 'p-3',
           }"
         >
           <div class="flex items-start justify-between gap-3">
             <div class="min-w-0">
               <div class="flex flex-wrap items-center gap-2">
-                <UBadge class="rounded-md px-2.5 py-1 text-[11px] font-bold uppercase tracking-[0.16em] ring-1" :class="stageMeta[record.stage].badge">
-                  {{ record.stage }}
+                <UBadge class="rounded-md px-2.5 py-1 text-[11px] font-bold uppercase tracking-[0.16em] ring-1" :class="operationMeta[record.operation].badge">
+                  {{ getOperationLabel(record.operation) }}
                 </UBadge>
                 <UBadge
                   :class="record.syncStatus === 'local'
@@ -331,7 +357,7 @@ onMounted(() => {
               </div>
             </div>
 
-            <div class="rounded-md px-2.5 py-2 text-center shadow-sm" :class="stageMeta[record.stage].chip">
+            <div class="rounded-md px-2.5 py-2 text-center shadow-sm" :class="operationMeta[record.operation].chip">
               <div class="text-[10px] font-bold uppercase tracking-[0.14em]">Volt</div>
               <div class="mt-1 text-lg leading-none font-black">{{ record.voltage.toFixed(2) }}</div>
             </div>

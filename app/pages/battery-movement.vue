@@ -1,5 +1,5 @@
 <script setup lang="ts">
-type MovementStage = 'PRE_CHARGE' | 'AFTER_CHARGE' | 'DELIVERY'
+type MovementStage = 'STOCK_TO_CHARGE' | 'CHARGE_TO_DELIVERY' | 'DELIVERY_TRANSFER'
 type ScanField = 'from' | 'battery' | 'to'
 type WorkflowStep = 'from' | 'voltage' | 'battery' | 'to' | 'save'
 type ScanSource = 'camera' | 'scanner' | 'manual'
@@ -33,12 +33,12 @@ const video = useTemplateRef<HTMLVideoElement>('video')
 const canvas = useTemplateRef<HTMLCanvasElement>('canvas')
 const scannerInput = useTemplateRef<HTMLInputElement>('scannerInput')
 
-const stage = ref<MovementStage>('PRE_CHARGE')
+const stage = ref<MovementStage>('STOCK_TO_CHARGE')
 const scanField = ref<ScanField>('from')
-const stageOptions = ['PRE_CHARGE', 'AFTER_CHARGE', 'DELIVERY']
+const stageOptions = ['STOCK_TO_CHARGE', 'CHARGE_TO_DELIVERY', 'DELIVERY_TRANSFER']
 
 const draft = reactive<MovementDraft>({
-  stage: 'PRE_CHARGE',
+  stage: 'STOCK_TO_CHARGE',
   fromRack: '',
   fromSlot: '',
   batterySn: '',
@@ -87,10 +87,10 @@ const stageMeta = computed(() => {
     action: string
     soft: string
   }> = {
-    PRE_CHARGE: {
-      index: 'STAGE 1',
-      label: 'Stock ->',
-      title: 'Store To Charging',
+    STOCK_TO_CHARGE: {
+      index: 'OPERATION 1',
+      label: 'Stock to Charge',
+      title: 'Stock To Charge',
       detail: 'Read source rack/slot, voltage, battery S/N, then target charging rack/slot',
       bg: 'bg-lime-200',
       panel: 'bg-white/30',
@@ -99,10 +99,10 @@ const stageMeta = computed(() => {
       action: 'bg-lime-900 text-white hover:bg-lime-800',
       soft: 'border border-lime-300/70 bg-lime-100/88 text-lime-950 hover:bg-lime-200/88',
     },
-    AFTER_CHARGE: {
-      index: 'STAGE 2',
-      label: 'Charge ->',
-      title: 'Charging To Delivery',
+    CHARGE_TO_DELIVERY: {
+      index: 'OPERATION 2',
+      label: 'Charge to Delivery',
+      title: 'Charge To Delivery',
       detail: 'Read charging rack/slot, voltage, battery S/N, then delivery rack/slot',
       bg: 'bg-emerald-200',
       panel: 'bg-white/30',
@@ -111,11 +111,11 @@ const stageMeta = computed(() => {
       action: 'bg-emerald-900 text-white hover:bg-emerald-800',
       soft: 'border border-emerald-300/70 bg-emerald-100/88 text-emerald-950 hover:bg-emerald-200/88',
     },
-    DELIVERY: {
-      index: 'STAGE 3',
-      label: 'Delivery',
-      title: 'Delivery To Destination',
-      detail: 'Read delivery rack/slot, voltage, battery S/N, then destination rack/slot',
+    DELIVERY_TRANSFER: {
+      index: 'OPERATION 3',
+      label: 'Delivery Transfer',
+      title: 'Delivery Transfer',
+      detail: 'Read delivery rack/slot, voltage, battery S/N, then transfer to the next delivery rack/slot',
       bg: 'bg-sky-200',
       panel: 'bg-white/32',
       status: 'border-sky-800/20 bg-sky-700 text-white',
@@ -129,9 +129,27 @@ const stageMeta = computed(() => {
 })
 
 const stageButtonLabels: Record<MovementStage, string> = {
-  PRE_CHARGE: 'Stock ->',
-  AFTER_CHARGE: 'Charge ->',
-  DELIVERY: 'Delivery',
+  STOCK_TO_CHARGE: 'Stock to Charge',
+  CHARGE_TO_DELIVERY: 'Charge to Delivery',
+  DELIVERY_TRANSFER: 'Delivery Transfer',
+}
+
+function normalizeOperation(value?: string) {
+  const normalized = {
+    PRE_CHARGE: 'STOCK_TO_CHARGE',
+    AFTER_CHARGE: 'CHARGE_TO_DELIVERY',
+    DELIVERY: 'DELIVERY_TRANSFER',
+  }[String(value ?? '').trim()] ?? String(value ?? '').trim()
+
+  if (!['STOCK_TO_CHARGE', 'CHARGE_TO_DELIVERY', 'DELIVERY_TRANSFER'].includes(normalized)) {
+    return 'STOCK_TO_CHARGE' as MovementStage
+  }
+
+  return normalized as MovementStage
+}
+
+function getOperationLabel(value: MovementStage) {
+  return stageButtonLabels[value]
 }
 
 const currentStep = computed(() => {
@@ -476,7 +494,7 @@ function saveLocalFallbackRecords(nextRecords: MovementRecord[]) {
 function normalizeRecord(record: Record<string, any>): MovementRecord {
   return {
     id: String(record.id),
-    stage: record.stage as MovementStage,
+    stage: normalizeOperation(record.operation ?? record.stage),
     fromRack: String(record.fromRack ?? ''),
     fromSlot: String(record.fromSlot ?? ''),
     batterySn: String(record.batterySn ?? ''),
@@ -589,7 +607,7 @@ function clearDraft() {
   stopEsp32Polling()
   esp32LinkState.value = 'disconnected'
   esp32StatusMessage.value = 'Draft cleared. Start with FROM rack/slot'
-  log.value = `Current ${stage.value} draft cleared`
+  log.value = `Current ${getOperationLabel(stage.value)} draft cleared`
   focusScannerCapture()
 }
 
@@ -598,7 +616,7 @@ function setStage(nextStage: MovementStage) {
   stage.value = nextStage
   draft.stage = nextStage
   resetDraft()
-  log.value = `Switched to ${nextStage}. Start with FROM rack/slot.`
+  log.value = `Switched to ${getOperationLabel(nextStage)}. Start with FROM rack/slot.`
   focusScannerCapture()
 }
 
@@ -814,7 +832,7 @@ async function finalizeIfReady() {
   isSavingRecord.value = true
 
   const payload = {
-    stage: stage.value,
+    operation: stage.value,
     fromRack: draft.fromRack,
     fromSlot: draft.fromSlot,
     batterySn: draft.batterySn,
@@ -834,7 +852,7 @@ async function finalizeIfReady() {
     })
 
     records.value.unshift(normalizeRecord(response.record))
-    log.value = `Auto-saved ${stage.value} movement to DB for battery ${draft.batterySn}`
+    log.value = `Auto-saved ${getOperationLabel(stage.value)} movement to DB for battery ${draft.batterySn}`
   }
   catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown DB save error'
@@ -855,7 +873,7 @@ async function finalizeIfReady() {
 
     records.value.unshift(fallbackRecord)
     saveLocalFallbackRecords(records.value.filter(record => record.syncStatus === 'local'))
-    log.value = `DB save failed for ${stage.value} battery ${draft.batterySn}: ${message}. Stored local fallback instead.`
+    log.value = `DB save failed for ${getOperationLabel(stage.value)} battery ${draft.batterySn}: ${message}. Stored local fallback instead.`
   }
 
   playFlowCompleteFeedback()
@@ -1062,7 +1080,7 @@ function applyManualVoltage() {
 }
 
 function readMockVoltage() {
-  const base = stage.value === 'PRE_CHARGE' ? 11.8 : stage.value === 'AFTER_CHARGE' ? 13.1 : 12.7
+  const base = stage.value === 'STOCK_TO_CHARGE' ? 11.8 : stage.value === 'CHARGE_TO_DELIVERY' ? 13.1 : 12.7
   const value = Number((base + Math.random() * 0.8).toFixed(2))
   setVoltage(value, 'mock')
 }
