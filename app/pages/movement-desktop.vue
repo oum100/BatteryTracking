@@ -55,6 +55,26 @@ const isDeleting = ref(false)
 const loadError = ref('')
 const formError = ref('')
 const editorOpen = ref(false)
+const currentPage = ref(1)
+const pageSize = ref(25)
+const pageSizeOptions = [25, 50, 100]
+const pageSizeItems = pageSizeOptions.map(value => ({ label: String(value), value }))
+const filterSelectUi = {
+  base: 'min-h-10 rounded-full border border-slate-300 bg-white text-sm text-slate-950 hover:bg-white focus:bg-white data-[state=open]:bg-white',
+  leadingIcon: 'text-slate-500',
+  placeholder: 'text-slate-500',
+  value: 'text-slate-950',
+  trailingIcon: 'text-slate-500',
+  content: 'bg-white',
+  item: 'text-slate-800 data-highlighted:not-data-disabled:text-slate-950 data-highlighted:not-data-disabled:before:bg-slate-100',
+} as const
+const pageSizeSelectUi = {
+  base: 'min-h-9 rounded-full border border-slate-300 bg-white text-sm text-slate-950 hover:bg-white focus:bg-white data-[state=open]:bg-white',
+  value: 'text-slate-950',
+  trailingIcon: 'text-slate-500',
+  content: 'bg-white',
+  item: 'text-slate-800 data-highlighted:not-data-disabled:text-slate-950 data-highlighted:not-data-disabled:before:bg-slate-100',
+} as const
 
 const operationOptions = [
   { label: 'All', value: 'ALL' },
@@ -129,6 +149,7 @@ const startDateTime = computed(() => buildFilterDateTime(startDateValue.value, s
 const endDateTime = computed(() => buildFilterDateTime(endDateValue.value, endTimeValue.value))
 const startDateLabel = computed(() => formatFilterDisplay(startDateValue.value, startTimeValue.value, 'From date & time'))
 const endDateLabel = computed(() => formatFilterDisplay(endDateValue.value, endTimeValue.value, 'To date & time'))
+const formMeasuredLabel = computed(() => formatFilterDisplay(formMeasuredDate.value, formMeasuredTime.value, 'Date & time'))
 
 const filteredRecords = computed(() => {
   const query = search.value.trim().toLowerCase()
@@ -185,6 +206,61 @@ const filteredRecords = computed(() => {
 })
 
 const totalCount = computed(() => filteredRecords.value.length)
+const totalPages = computed(() => Math.max(1, Math.ceil(totalCount.value / pageSize.value)))
+const paginatedRecords = computed(() => {
+  const start = (currentPage.value - 1) * pageSize.value
+  return filteredRecords.value.slice(start, start + pageSize.value)
+})
+const pageStart = computed(() => totalCount.value === 0 ? 0 : (currentPage.value - 1) * pageSize.value + 1)
+const pageEnd = computed(() => Math.min(currentPage.value * pageSize.value, totalCount.value))
+const visiblePages = computed(() => {
+  const start = Math.max(1, currentPage.value - 2)
+  const end = Math.min(totalPages.value, start + 4)
+  const adjustedStart = Math.max(1, end - 4)
+  return Array.from({ length: end - adjustedStart + 1 }, (_, index) => adjustedStart + index)
+})
+const formMeasuredDate = computed(() => {
+  if (!form.voltageMeasuredAt) {
+    return undefined
+  }
+
+  const [datePart] = form.voltageMeasuredAt.split('T')
+  const [year, month, day] = datePart.split('-').map(Number)
+
+  if (!year || !month || !day) {
+    return undefined
+  }
+
+  return new CalendarDate(year, month, day)
+})
+const formMeasuredTime = computed(() => {
+  if (!form.voltageMeasuredAt) {
+    return undefined
+  }
+
+  const [, timePart = ''] = form.voltageMeasuredAt.split('T')
+  const [hour, minute] = timePart.split(':').map(Number)
+
+  if (Number.isNaN(hour) || Number.isNaN(minute)) {
+    return undefined
+  }
+
+  return new Time(hour, minute)
+})
+
+watch(filteredRecords, () => {
+  currentPage.value = 1
+})
+
+watch(pageSize, () => {
+  currentPage.value = 1
+})
+
+watch(totalPages, (value) => {
+  if (currentPage.value > value) {
+    currentPage.value = value
+  }
+})
 
 function formatDateTime(value: string | null) {
   if (!value) {
@@ -206,6 +282,33 @@ function formatDateTimeLocal(value: string | null) {
   const offset = date.getTimezoneOffset()
   const localDate = new Date(date.getTime() - offset * 60000)
   return localDate.toISOString().slice(0, 16)
+}
+
+function syncMeasuredDateTime(dateValue?: CalendarDate, timeValue?: Time) {
+  if (!dateValue) {
+    form.voltageMeasuredAt = ''
+    return
+  }
+
+  const hours = timeValue?.hour ?? 0
+  const minutes = timeValue?.minute ?? 0
+
+  form.voltageMeasuredAt = [
+    `${dateValue.year}-${padDateSegment(dateValue.month)}-${padDateSegment(dateValue.day)}`,
+    `${padDateSegment(hours)}:${padDateSegment(minutes)}`,
+  ].join('T')
+}
+
+function setFormMeasuredDate(value?: CalendarDate) {
+  syncMeasuredDateTime(value, value ? (formMeasuredTime.value ?? new Time(0, 0)) : undefined)
+}
+
+function setFormMeasuredTime(value?: Time) {
+  if (!formMeasuredDate.value) {
+    return
+  }
+
+  syncMeasuredDateTime(formMeasuredDate.value, value)
 }
 
 function padDateSegment(value: number) {
@@ -292,6 +395,11 @@ function resetForm() {
 function openCreate() {
   resetForm()
   editorOpen.value = true
+}
+
+function closeEditor() {
+  editorOpen.value = false
+  formError.value = ''
 }
 
 function openEdit(record: MovementRecord) {
@@ -479,27 +587,14 @@ async function exportPdf() {
         }"
       >
         <div class="min-w-0">
-          <div class="flex flex-wrap items-center gap-3">
-            <UBadge class="rounded-md px-3 py-1 text-sm font-bold uppercase tracking-[0.18em] ring-1 bg-slate-100 text-slate-950 ring-slate-300/80">
-              Desktop
-            </UBadge>
-
-            <div class="inline-flex items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-1.5 shadow-sm">
-              <span class="text-xs font-bold uppercase tracking-[0.18em] text-slate-500">
-                Showing
-              </span>
-              <span class="text-xl leading-none font-black text-slate-950">
-                {{ totalCount }}
-              </span>
-            </div>
+          <div class="min-w-0">
+            <h1 class="text-4xl leading-none font-black tracking-tight">
+              Battery Movement History
+            </h1>
+            <p class="mt-3 block text-sm text-slate-600">
+              ดูข้อมูล, filter, แก้ไข, ลบ และ export รายการ movement จาก Postgres
+            </p>
           </div>
-
-          <h1 class="mt-3 text-4xl leading-none font-black tracking-tight">
-            Battery Movement History
-          </h1>
-          <p class="mt-2 text-sm text-slate-600">
-            ดูข้อมูล, filter, แก้ไข, ลบ และ export รายการ movement จาก Postgres
-          </p>
         </div>
       </UCard>
 
@@ -509,203 +604,190 @@ async function exportPdf() {
           body: 'p-4',
         }"
       >
-        <div class="grid gap-3 lg:grid-cols-[1.2fr_0.95fr_0.85fr_0.85fr_1fr_1fr]">
-          <UFormField label="Search" name="search" :ui="{ label: 'text-xs font-semibold text-slate-700' }">
-            <UInput
-              v-model="search"
-              leading-icon="i-lucide-search"
-              size="lg"
-              placeholder="Battery, device, note"
-              :ui="{ base: 'min-h-10 bg-white text-sm text-slate-950 placeholder:text-slate-500', leadingIcon: 'text-slate-500' }"
-            />
-          </UFormField>
-
-          <UFormField label="Battery" name="battery-filter" :ui="{ label: 'text-xs font-semibold text-slate-700' }">
-            <USelectMenu
-              v-model="batteryFilter"
-              :items="batteryOptions"
-              value-key="value"
-              label-key="label"
-              searchable
-              clear
-              leading-icon="i-lucide-battery-full"
-              size="lg"
-              placeholder="Select battery S/N"
-              :search-input="{ placeholder: 'Search battery S/N...' }"
-              :ui="{
-                base: 'min-h-10 bg-white text-sm text-slate-950',
-                leadingIcon: 'text-slate-500',
-                placeholder: 'text-slate-500',
-                value: 'text-slate-950',
-                content: 'bg-white',
-                item: 'text-slate-800'
-              }"
-            />
-          </UFormField>
-
-          <UFormField label="From Rack" name="from-rack-filter" :ui="{ label: 'text-xs font-semibold text-slate-700' }">
-            <USelectMenu
-              v-model="fromRackFilter"
-              :items="rackOptions"
-              value-key="value"
-              label-key="label"
-              searchable
-              clear
-              leading-icon="i-lucide-map-pinned"
-              size="lg"
-              placeholder="Select from rack"
-              :search-input="{ placeholder: 'Search from rack...' }"
-              :ui="{
-                base: 'min-h-10 bg-white text-sm text-slate-950',
-                leadingIcon: 'text-slate-500',
-                placeholder: 'text-slate-500',
-                value: 'text-slate-950',
-                content: 'bg-white',
-                item: 'text-slate-800'
-              }"
-            />
-          </UFormField>
-
-          <UFormField label="To Rack" name="to-rack-filter" :ui="{ label: 'text-xs font-semibold text-slate-700' }">
-            <USelectMenu
-              v-model="toRackFilter"
-              :items="rackOptions"
-              value-key="value"
-              label-key="label"
-              searchable
-              clear
-              leading-icon="i-lucide-map-pinned"
-              size="lg"
-              placeholder="Select to rack"
-              :search-input="{ placeholder: 'Search to rack...' }"
-              :ui="{
-                base: 'min-h-10 bg-white text-sm text-slate-950',
-                leadingIcon: 'text-slate-500',
-                placeholder: 'text-slate-500',
-                value: 'text-slate-950',
-                content: 'bg-white',
-                item: 'text-slate-800'
-              }"
-            />
-          </UFormField>
-
-          <UFormField label="From Date Time" name="from-date-time" :ui="{ label: 'text-xs font-semibold text-slate-700' }">
-            <UPopover :content="{ align: 'start', side: 'bottom', sideOffset: 8 }">
+        <div class="flex flex-col gap-3">
+          <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+            <div class="flex flex-wrap items-stretch gap-2 lg:flex-nowrap">
               <UButton
+                v-for="option in operationOptions"
+                :key="option.value"
+                size="sm"
+                color="neutral"
+                variant="soft"
+                :class="[
+                  'min-h-11',
+                  selectedOperation === option.value ? 'bg-sky-600 text-white hover:bg-sky-700' : 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-50'
+                ]"
+                @click="selectedOperation = option.value"
+              >
+                {{ option.label }}
+              </UButton>
+            </div>
+
+            <div class="flex flex-wrap items-stretch gap-2 lg:flex-nowrap lg:justify-end">
+              <UButton size="sm" color="neutral" variant="soft" icon="i-lucide-file-spreadsheet" class="min-h-10 border border-slate-300 bg-white text-slate-700 hover:bg-slate-50" @click="exportExcel">
+                Export Excel
+              </UButton>
+              <UButton size="sm" color="neutral" variant="soft" icon="i-lucide-file-text" class="min-h-10 border border-slate-300 bg-white text-slate-700 hover:bg-slate-50" @click="exportPdf">
+                Export PDF
+              </UButton>
+              <UButton size="sm" color="neutral" variant="soft" icon="i-lucide-plus" class="min-h-10 bg-lime-100 text-lime-950 hover:bg-lime-200" @click="openCreate">
+                New Record
+              </UButton>
+              <UButton size="sm" color="neutral" variant="soft" icon="i-lucide-refresh-cw" :loading="isRefreshing" class="min-h-10 border border-slate-300 bg-white text-slate-700 hover:bg-slate-50" @click="reloadRecords">
+                Refresh
+              </UButton>
+            </div>
+          </div>
+
+          <div class="flex flex-col gap-3 lg:flex-row lg:flex-nowrap lg:items-end lg:gap-2">
+            <UFormField label="Search" name="search" class="lg:min-w-0 lg:flex-1" :ui="{ label: 'text-xs font-semibold text-slate-700' }">
+              <UInput
+                v-model="search"
+                leading-icon="i-lucide-search"
+                size="md"
+                placeholder="Battery, device, note"
+                :ui="{ base: 'min-h-10 bg-white text-sm text-slate-950 placeholder:text-slate-500', leadingIcon: 'text-slate-500' }"
+              />
+            </UFormField>
+
+            <UFormField label="Battery" name="battery-filter" class="lg:min-w-0 lg:flex-1" :ui="{ label: 'text-xs font-semibold text-slate-700' }">
+              <USelectMenu
+                v-model="batteryFilter"
+                :items="batteryOptions"
+                value-key="value"
+                label-key="label"
+                searchable
+                clear
                 color="neutral"
                 variant="outline"
-                class="h-10 w-full justify-between rounded-md border-slate-300 bg-white px-3 text-sm font-medium text-slate-700 hover:bg-slate-50"
-              >
-                <span :class="startDateValue ? 'text-slate-950' : 'text-slate-500'">
-                  {{ startDateLabel }}
-                </span>
-                <UIcon name="i-lucide-calendar-days" class="size-4 text-slate-500" />
-              </UButton>
+                leading-icon="i-lucide-battery-full"
+                size="lg"
+                placeholder="Select battery S/N"
+                :search-input="{ placeholder: 'Search battery S/N...' }"
+                :ui="filterSelectUi"
+              />
+            </UFormField>
 
-              <template #content>
-                <div class="w-[320px] space-y-3 rounded-md bg-white p-3 shadow-xl">
-                  <UCalendar
-                    :model-value="startDateValue"
-                    color="neutral"
-                    variant="soft"
-                    :year-controls="true"
-                    @update:model-value="setFilterDate('start', $event as CalendarDate | undefined)"
-                  />
-
-                  <UFormField label="Time" :ui="{ label: 'text-sm font-semibold text-slate-700' }">
-                    <UInputTime
-                      :model-value="startTimeValue"
-                      size="lg"
-                      :ui="{ base: 'min-h-10 bg-white text-sm text-slate-950' }"
-                      @update:model-value="setFilterTime('start', $event as Time | undefined)"
-                    />
-                  </UFormField>
-
-                  <div class="flex justify-end">
-                    <UButton color="neutral" variant="ghost" size="sm" @click="clearDateFilter('start')">
-                      Clear
-                    </UButton>
-                  </div>
-                </div>
-              </template>
-            </UPopover>
-          </UFormField>
-
-          <UFormField label="To Date Time" name="to-date-time" :ui="{ label: 'text-xs font-semibold text-slate-700' }">
-            <UPopover :content="{ align: 'start', side: 'bottom', sideOffset: 8 }">
-              <UButton
+            <UFormField label="From Rack" name="from-rack-filter" class="lg:min-w-0 lg:flex-1" :ui="{ label: 'text-xs font-semibold text-slate-700' }">
+              <USelectMenu
+                v-model="fromRackFilter"
+                :items="rackOptions"
+                value-key="value"
+                label-key="label"
+                searchable
+                clear
                 color="neutral"
                 variant="outline"
-                class="h-10 w-full justify-between rounded-md border-slate-300 bg-white px-3 text-sm font-medium text-slate-700 hover:bg-slate-50"
-              >
-                <span :class="endDateValue ? 'text-slate-950' : 'text-slate-500'">
-                  {{ endDateLabel }}
-                </span>
-                <UIcon name="i-lucide-calendar-days" class="size-4 text-slate-500" />
-              </UButton>
+                leading-icon="i-lucide-map-pinned"
+                size="lg"
+                placeholder="Select from rack"
+                :search-input="{ placeholder: 'Search from rack...' }"
+                :ui="filterSelectUi"
+              />
+            </UFormField>
 
-              <template #content>
-                <div class="w-[320px] space-y-3 rounded-md bg-white p-3 shadow-xl">
-                  <UCalendar
-                    :model-value="endDateValue"
-                    color="neutral"
-                    variant="soft"
-                    :year-controls="true"
-                    @update:model-value="setFilterDate('end', $event as CalendarDate | undefined)"
-                  />
+            <UFormField label="To Rack" name="to-rack-filter" class="lg:min-w-0 lg:flex-1" :ui="{ label: 'text-xs font-semibold text-slate-700' }">
+              <USelectMenu
+                v-model="toRackFilter"
+                :items="rackOptions"
+                value-key="value"
+                label-key="label"
+                searchable
+                clear
+                color="neutral"
+                variant="outline"
+                leading-icon="i-lucide-map-pinned"
+                size="lg"
+                placeholder="Select to rack"
+                :search-input="{ placeholder: 'Search to rack...' }"
+                :ui="filterSelectUi"
+              />
+            </UFormField>
 
-                  <UFormField label="Time" :ui="{ label: 'text-sm font-semibold text-slate-700' }">
-                    <UInputTime
-                      :model-value="endTimeValue"
-                      size="lg"
-                      :ui="{ base: 'min-h-10 bg-white text-sm text-slate-950' }"
-                      @update:model-value="setFilterTime('end', $event as Time | undefined)"
+            <UFormField label="From Date Time" name="from-date-time" class="lg:min-w-0 lg:flex-1" :ui="{ label: 'text-xs font-semibold text-slate-700' }">
+              <UPopover :content="{ align: 'start', side: 'bottom', sideOffset: 8 }">
+                <UButton
+                  color="neutral"
+                  variant="outline"
+                  class="h-10 w-full justify-between rounded-md border-slate-300 bg-white px-3 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                >
+                  <span :class="startDateValue ? 'text-slate-950' : 'text-slate-500'">
+                    {{ startDateLabel }}
+                  </span>
+                  <UIcon name="i-lucide-calendar-days" class="size-4 text-slate-500" />
+                </UButton>
+
+                <template #content>
+                  <div class="w-[320px] space-y-3 rounded-md bg-white p-3 shadow-xl">
+                    <UCalendar
+                      :model-value="startDateValue"
+                      color="neutral"
+                      variant="soft"
+                      :year-controls="true"
+                      @update:model-value="setFilterDate('start', $event as CalendarDate | undefined)"
                     />
-                  </UFormField>
 
-                  <div class="flex justify-end">
-                    <UButton color="neutral" variant="ghost" size="sm" @click="clearDateFilter('end')">
-                      Clear
-                    </UButton>
+                    <UFormField label="Time" :ui="{ label: 'text-sm font-semibold text-slate-700' }">
+                      <UInputTime
+                        :model-value="startTimeValue"
+                        size="lg"
+                        :ui="{ base: 'min-h-10 bg-white text-sm text-slate-950' }"
+                        @update:model-value="setFilterTime('start', $event as Time | undefined)"
+                      />
+                    </UFormField>
+
+                    <div class="flex justify-end">
+                      <UButton color="neutral" variant="ghost" size="sm" @click="clearDateFilter('start')">
+                        Clear
+                      </UButton>
+                    </div>
                   </div>
-                </div>
-              </template>
-            </UPopover>
-          </UFormField>
-        </div>
+                </template>
+              </UPopover>
+            </UFormField>
 
-        <div class="mt-3 flex flex-wrap gap-2">
-          <UButton
-            v-for="option in operationOptions"
-            :key="option.value"
-            size="sm"
-            color="neutral"
-            variant="soft"
-            :class="selectedOperation === option.value ? 'bg-slate-900 text-white hover:bg-slate-800' : 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-50'"
-            @click="selectedOperation = option.value"
-          >
-            {{ option.label }}
-          </UButton>
-        </div>
+            <UFormField label="To Date Time" name="to-date-time" class="lg:min-w-0 lg:flex-1" :ui="{ label: 'text-xs font-semibold text-slate-700' }">
+              <UPopover :content="{ align: 'start', side: 'bottom', sideOffset: 8 }">
+                <UButton
+                  color="neutral"
+                  variant="outline"
+                  class="h-10 w-full justify-between rounded-md border-slate-300 bg-white px-3 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                >
+                  <span :class="endDateValue ? 'text-slate-950' : 'text-slate-500'">
+                    {{ endDateLabel }}
+                  </span>
+                  <UIcon name="i-lucide-calendar-days" class="size-4 text-slate-500" />
+                </UButton>
 
-        <div class="mt-4 flex flex-wrap gap-2">
-          <UButton color="neutral" variant="soft" icon="i-lucide-plus" class="bg-lime-100 text-lime-950 hover:bg-lime-200" @click="openCreate">
-            New Record
-          </UButton>
-          <UButton color="neutral" variant="soft" icon="i-lucide-refresh-cw" :loading="isRefreshing" class="border border-slate-300 bg-white text-slate-700 hover:bg-slate-50" @click="reloadRecords">
-            Refresh
-          </UButton>
-          <UButton color="neutral" variant="soft" icon="i-lucide-file-spreadsheet" class="border border-slate-300 bg-white text-slate-700 hover:bg-slate-50" @click="exportExcel">
-            Export Excel
-          </UButton>
-          <UButton color="neutral" variant="soft" icon="i-lucide-file-text" class="border border-slate-300 bg-white text-slate-700 hover:bg-slate-50" @click="exportPdf">
-            Export PDF
-          </UButton>
-          <NuxtLink to="/movement-history" class="contents">
-            <UButton color="neutral" variant="soft" icon="i-lucide-smartphone" class="border border-slate-300 bg-white text-slate-700 hover:bg-slate-50">
-              Mobile View
-            </UButton>
-          </NuxtLink>
+                <template #content>
+                  <div class="w-[320px] space-y-3 rounded-md bg-white p-3 shadow-xl">
+                    <UCalendar
+                      :model-value="endDateValue"
+                      color="neutral"
+                      variant="soft"
+                      :year-controls="true"
+                      @update:model-value="setFilterDate('end', $event as CalendarDate | undefined)"
+                    />
+
+                    <UFormField label="Time" :ui="{ label: 'text-sm font-semibold text-slate-700' }">
+                      <UInputTime
+                        :model-value="endTimeValue"
+                        size="lg"
+                        :ui="{ base: 'min-h-10 bg-white text-sm text-slate-950' }"
+                        @update:model-value="setFilterTime('end', $event as Time | undefined)"
+                      />
+                    </UFormField>
+
+                    <div class="flex justify-end">
+                      <UButton color="neutral" variant="ghost" size="sm" @click="clearDateFilter('end')">
+                        Clear
+                      </UButton>
+                    </div>
+                  </div>
+                </template>
+              </UPopover>
+            </UFormField>
+          </div>
         </div>
       </UCard>
 
@@ -717,71 +799,128 @@ async function exportPdf() {
         :description="loadError"
       />
 
-      <UCard
-        v-if="editorOpen"
+      <UModal
+        v-model:open="editorOpen"
+        :dismissible="true"
+        :close="false"
+        :overlay="true"
+        :scrollable="true"
+        :content="{
+          class: 'w-[min(96vw,1600px)] max-w-none rounded-2xl bg-white shadow-[0_24px_80px_rgba(15,23,42,0.25)]'
+        }"
         :ui="{
-          root: 'rounded-md ring-0 bg-white/95 shadow-[0_16px_36px_rgba(15,23,42,0.08)]',
-          body: 'p-5',
+          body: 'p-5 md:p-8',
+          overlay: 'bg-slate-950/35 backdrop-blur-[2px]'
         }"
       >
-        <div class="flex items-center justify-between gap-3">
+        <template #body>
           <div>
-            <div class="text-sm font-bold uppercase tracking-[0.18em] text-slate-500">
-              {{ form.id ? 'Edit Record' : 'Create Record' }}
-            </div>
-            <div class="mt-1 text-xl font-black text-slate-950">
-              {{ form.id ? form.batterySn || form.id : 'New Battery Movement' }}
-            </div>
-          </div>
-          <UButton color="neutral" variant="ghost" icon="i-lucide-x" @click="editorOpen = false" />
-        </div>
+              <div class="flex items-center justify-between gap-3">
+                <div>
+                  <div class="text-sm font-bold uppercase tracking-[0.18em] text-slate-500">
+                    {{ form.id ? 'Edit Record' : 'Create Record' }}
+                  </div>
+                  <div class="mt-1 text-2xl font-black text-slate-950">
+                    {{ form.id ? form.batterySn || form.id : 'New Battery Movement' }}
+                  </div>
+                </div>
+                <UButton color="neutral" variant="ghost" icon="i-lucide-x" @click="closeEditor" />
+              </div>
 
-        <div class="mt-4 grid gap-3 md:grid-cols-4">
-          <UInput v-model="form.fromRack" placeholder="From Rack" :ui="{ base: '!min-h-11 !bg-white !px-3 !py-2 !text-sm !text-slate-950' }" />
-          <UInput v-model="form.fromSlot" placeholder="From Slot" :ui="{ base: '!min-h-11 !bg-white !px-3 !py-2 !text-sm !text-slate-950' }" />
-          <UInput v-model="form.batterySn" placeholder="Battery S/N" :ui="{ base: '!min-h-11 !bg-white !px-3 !py-2 !text-sm !text-slate-950' }" />
-          <UInput v-model="form.voltage" type="number" step="0.01" placeholder="Voltage" :ui="{ base: '!min-h-11 !bg-white !px-3 !py-2 !text-sm !text-slate-950' }" />
-          <UInput v-model="form.toRack" placeholder="To Rack" :ui="{ base: '!min-h-11 !bg-white !px-3 !py-2 !text-sm !text-slate-950' }" />
-          <UInput v-model="form.toSlot" placeholder="To Slot" :ui="{ base: '!min-h-11 !bg-white !px-3 !py-2 !text-sm !text-slate-950' }" />
-          <UInput v-model="form.scanSource" placeholder="Scan Source" :ui="{ base: '!min-h-11 !bg-white !px-3 !py-2 !text-sm !text-slate-950' }" />
-          <UInput v-model="form.voltageSource" placeholder="Voltage Source" :ui="{ base: '!min-h-11 !bg-white !px-3 !py-2 !text-sm !text-slate-950' }" />
-          <UInput v-model="form.deviceId" placeholder="Device ID" :ui="{ base: '!min-h-11 !bg-white !px-3 !py-2 !text-sm !text-slate-950' }" />
-          <UInput v-model="form.voltageMeasuredAt" type="datetime-local" :ui="{ base: '!min-h-11 !bg-white !px-3 !py-2 !text-sm !text-slate-950' }" />
-          <div class="md:col-span-2 grid grid-cols-3 gap-2">
-            <UButton
-              v-for="option in operationOptions.filter(option => option.value !== 'ALL')"
-              :key="option.value"
-              color="neutral"
-              variant="soft"
-              :class="form.operation === option.value ? 'bg-slate-900 text-white hover:bg-slate-800' : 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-50'"
-              @click="form.operation = option.value"
-            >
-              {{ option.label }}
-            </UButton>
-          </div>
-          <div class="md:col-span-4">
-            <UTextarea v-model="form.notes" placeholder="Notes" :ui="{ base: '!bg-white !px-3 !py-2 !text-sm !text-slate-950 !placeholder:text-slate-400' }" />
-          </div>
-        </div>
+              <div class="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                <div class="flex flex-wrap gap-2 md:col-span-2 xl:col-span-3">
+                  <UButton
+                    v-for="option in operationOptions.filter(option => option.value !== 'ALL')"
+                    :key="option.value"
+                    color="neutral"
+                    variant="soft"
+                    :class="[
+                      'min-h-11 px-5',
+                      form.operation === option.value ? 'bg-sky-600 text-white hover:bg-sky-700' : 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-50'
+                    ]"
+                    @click="form.operation = option.value"
+                  >
+                    {{ option.label }}
+                  </UButton>
+                </div>
 
-        <UAlert
-          v-if="formError"
-          class="mt-3"
-          color="error"
-          variant="soft"
-          title="Save Error"
-          :description="formError"
-        />
+                <div class="w-full">
+                  <UPopover :content="{ align: 'end', side: 'bottom', sideOffset: 8 }">
+                    <UButton
+                      color="neutral"
+                      variant="outline"
+                      class="h-11 w-full justify-between rounded-md border-slate-300 bg-white px-3 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                    >
+                      <span :class="formMeasuredDate ? 'text-slate-950' : 'text-slate-500'">
+                        {{ formMeasuredLabel }}
+                      </span>
+                      <UIcon name="i-lucide-calendar-days" class="size-4 text-slate-500" />
+                    </UButton>
 
-        <div class="mt-4 flex flex-wrap gap-2">
-          <UButton color="neutral" variant="soft" :loading="isSaving" class="bg-lime-100 text-lime-950 hover:bg-lime-200" @click="saveRecord">
-            {{ form.id ? 'Update Record' : 'Create Record' }}
-          </UButton>
-          <UButton color="neutral" variant="soft" class="border border-slate-300 bg-white text-slate-700 hover:bg-slate-50" @click="resetForm">
-            Reset
-          </UButton>
-        </div>
-      </UCard>
+                    <template #content>
+                      <div class="w-[320px] space-y-3 rounded-md bg-white p-3 shadow-xl">
+                        <UCalendar
+                          :model-value="formMeasuredDate"
+                          color="neutral"
+                          variant="soft"
+                          :year-controls="true"
+                          @update:model-value="setFormMeasuredDate($event as CalendarDate | undefined)"
+                        />
+
+                        <UFormField label="Time" :ui="{ label: 'text-sm font-semibold text-slate-700' }">
+                          <UInputTime
+                            :model-value="formMeasuredTime"
+                            size="lg"
+                            :ui="{ base: 'min-h-10 bg-white text-sm text-slate-950' }"
+                            @update:model-value="setFormMeasuredTime($event as Time | undefined)"
+                          />
+                        </UFormField>
+
+                        <div class="flex justify-end">
+                          <UButton color="neutral" variant="ghost" size="sm" @click="setFormMeasuredDate(undefined)">
+                            Clear
+                          </UButton>
+                        </div>
+                      </div>
+                    </template>
+                  </UPopover>
+                </div>
+              </div>
+
+              <div class="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                <UInput v-model="form.fromRack" placeholder="From Rack" :ui="{ base: '!min-h-11 !bg-white !px-3 !py-2 !text-sm !text-slate-950' }" />
+                <UInput v-model="form.fromSlot" placeholder="From Slot" :ui="{ base: '!min-h-11 !bg-white !px-3 !py-2 !text-sm !text-slate-950' }" />
+                <UInput v-model="form.batterySn" placeholder="Battery S/N" :ui="{ base: '!min-h-11 !bg-white !px-3 !py-2 !text-sm !text-slate-950' }" />
+                <UInput v-model="form.voltage" type="number" step="0.01" placeholder="Voltage" :ui="{ base: '!min-h-11 !bg-white !px-3 !py-2 !text-sm !text-slate-950' }" />
+                <UInput v-model="form.toRack" placeholder="To Rack" :ui="{ base: '!min-h-11 !bg-white !px-3 !py-2 !text-sm !text-slate-950' }" />
+                <UInput v-model="form.toSlot" placeholder="To Slot" :ui="{ base: '!min-h-11 !bg-white !px-3 !py-2 !text-sm !text-slate-950' }" />
+                <UInput v-model="form.scanSource" placeholder="Scan Source" :ui="{ base: '!min-h-11 !bg-white !px-3 !py-2 !text-sm !text-slate-950' }" />
+                <UInput v-model="form.voltageSource" placeholder="Voltage Source" :ui="{ base: '!min-h-11 !bg-white !px-3 !py-2 !text-sm !text-slate-950' }" />
+              </div>
+
+              <UAlert
+                v-if="formError"
+                class="mt-4"
+                color="error"
+                variant="soft"
+                title="Save Error"
+                :description="formError"
+              />
+
+              <div class="mt-5 flex flex-wrap justify-end gap-2">
+                <UButton color="neutral" variant="soft" :loading="isSaving" class="bg-lime-100 text-lime-950 hover:bg-lime-200" @click="saveRecord">
+                  {{ form.id ? 'Update Record' : 'Create Record' }}
+                </UButton>
+                <UButton color="neutral" variant="soft" class="border border-slate-300 bg-white text-slate-700 hover:bg-slate-50" @click="closeEditor">
+                  Cancel
+                </UButton>
+                <UButton color="neutral" variant="soft" class="border border-slate-300 bg-white text-slate-700 hover:bg-slate-50" @click="resetForm">
+                  Reset
+                </UButton>
+              </div>
+          </div>
+        </template>
+      </UModal>
 
       <UCard
         :ui="{
@@ -816,7 +955,7 @@ async function exportPdf() {
                 </td>
               </tr>
               <tr
-                v-for="record in filteredRecords"
+                v-for="record in paginatedRecords"
                 :key="record.id"
                 class="border-b border-slate-200 align-top hover:bg-slate-50/80"
               >
@@ -863,6 +1002,63 @@ async function exportPdf() {
               </tr>
             </tbody>
           </table>
+        </div>
+
+        <div class="flex flex-col gap-3 border-t border-slate-200 px-4 py-3 lg:flex-row lg:items-center lg:justify-between">
+          <div class="flex flex-col gap-2 text-sm text-slate-600 sm:flex-row sm:items-center">
+            <span>Showing {{ pageStart }}-{{ pageEnd }} of {{ totalCount }}</span>
+            <div class="flex items-center gap-2">
+              <span>Rows per page</span>
+              <USelectMenu
+                v-model="pageSize"
+                :items="pageSizeItems"
+                value-key="value"
+                label-key="label"
+                size="sm"
+                color="neutral"
+                variant="outline"
+                class="w-20"
+                :search-input="false"
+                :ui="pageSizeSelectUi"
+              />
+            </div>
+          </div>
+
+          <div v-if="totalPages > 1" class="flex flex-wrap items-center gap-2">
+            <UButton
+              size="sm"
+              color="neutral"
+              variant="soft"
+              :class="currentPage === 1 ? 'border border-slate-300 bg-slate-100 text-slate-500 opacity-100' : 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-50'"
+              :disabled="currentPage === 1"
+              @click="currentPage -= 1"
+            >
+              Prev
+            </UButton>
+
+            <UButton
+              v-for="page in visiblePages"
+              :key="page"
+              size="sm"
+              color="neutral"
+              variant="soft"
+              :class="page === currentPage ? 'bg-sky-600 text-white hover:bg-sky-700' : 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-50'"
+              @click="currentPage = page"
+            >
+              {{ page }}
+            </UButton>
+
+            <UButton
+              size="sm"
+              color="neutral"
+              variant="soft"
+              :class="currentPage === totalPages ? 'border border-slate-300 bg-slate-100 text-slate-500 opacity-100' : 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-50'"
+              :disabled="currentPage === totalPages"
+              @click="currentPage += 1"
+            >
+              Next
+            </UButton>
+          </div>
         </div>
       </UCard>
     </section>
