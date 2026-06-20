@@ -20,6 +20,7 @@ interface MovementDraft {
 interface MovementRecord extends MovementDraft {
   id: string
   savedAt: string
+  firmwareVersion?: string | null
   syncStatus?: 'db' | 'local'
 }
 
@@ -28,7 +29,9 @@ const COUNT_OFFSET_KEY = 'battery-movement-v1-count-offset'
 const API_ENDPOINT = '/api/battery-movements'
 const BLE_SERVICE_UUID = '7f9e0001-6a9d-4f7e-8d4d-32e7be6f1001'
 const BLE_CHARACTERISTIC_UUID = '7f9e0002-6a9d-4f7e-8d4d-32e7be6f1001'
-const BLE_DEVICE_NAME = 'ESP32-LIFTER-01'
+const BLE_DEVICE_NAME = 'PUMA-Voltmeter'
+const BLE_DEVICE_NAME_PREFIX = 'PUMA-Voltmeter-'
+const BLE_DEVICE_ID_PREFIX = 'PUMA-VoltMeter-'
 
 const video = useTemplateRef<HTMLVideoElement>('video')
 const canvas = useTemplateRef<HTMLCanvasElement>('canvas')
@@ -77,6 +80,8 @@ let esp32StableHits = 0
 let bleDevice: BluetoothDevice | null = null
 let bleServer: BluetoothRemoteGATTServer | null = null
 let bleCharacteristic: BluetoothRemoteGATTCharacteristic | null = null
+let blePayloadDeviceId: string | null = null
+let blePayloadFirmwareVersion: string | null = null
 const textDecoder = new TextDecoder()
 
 const stageMeta = computed(() => {
@@ -171,7 +176,7 @@ const currentStep = computed(() => {
   }
 
   if (draft.voltage === null) {
-    return 'STEP 3 • Read voltage from BLE ESP32 or mock'
+    return 'STEP 3 • Read voltage from BLE ESP32'
   }
 
   if (!draft.toRack || !draft.toSlot) {
@@ -371,6 +376,14 @@ const esp32Status = computed(() => {
 })
 
 const bleTransportStatusLabel = computed(() => bleConnected.value ? 'BLE Linked' : 'BLE Offline')
+const bleIdentityDetail = computed(() => {
+  const details = [
+    blePayloadDeviceId || null,
+    blePayloadFirmwareVersion ? `FW ${blePayloadFirmwareVersion}` : null,
+  ].filter(Boolean)
+
+  return details.length ? details.join(' • ') : 'Waiting for BLE payload'
+})
 
 function ensureAudioContext() {
   if (typeof window === 'undefined' || !('AudioContext' in window)) {
@@ -511,6 +524,7 @@ function normalizeRecord(record: Record<string, any>): MovementRecord {
     toRack: String(record.toRack ?? ''),
     toSlot: String(record.toSlot ?? ''),
     savedAt: String(record.createdAt ?? record.savedAt ?? new Date().toISOString()),
+    firmwareVersion: record.firmwareVersion ? String(record.firmwareVersion) : null,
     syncStatus: record.syncStatus === 'local' ? 'local' : 'db',
   }
 }
@@ -600,6 +614,26 @@ function setStage(nextStage: MovementStage) {
 function resetEsp32ReadingState() {
   esp32LastVoltage = null
   esp32StableHits = 0
+  blePayloadDeviceId = null
+  blePayloadFirmwareVersion = null
+}
+
+function extractFirmwareVersion(payload: Record<string, any>) {
+  const candidates = [
+    payload.fw,
+    payload.firmwareVersion,
+    payload.data?.fw,
+  ]
+
+  for (const candidate of candidates) {
+    const normalized = String(candidate ?? '').trim()
+
+    if (normalized) {
+      return normalized
+    }
+  }
+
+  return null
 }
 
 function extractVoltageValue(payload: Record<string, any>) {
@@ -697,12 +731,26 @@ function consumeBleMeasurementPayload(payload: Record<string, any>) {
     return
   }
 
+  const payloadDeviceId = String(payload.id ?? '').trim()
+
+  if (payloadDeviceId && !payloadDeviceId.startsWith(BLE_DEVICE_ID_PREFIX)) {
+    esp32LinkState.value = 'error'
+    esp32StatusMessage.value = `Unexpected device id: ${payloadDeviceId}`
+    return
+  }
+
+  if (payloadDeviceId) {
+    blePayloadDeviceId = payloadDeviceId
+  }
+
+  blePayloadFirmwareVersion = extractFirmwareVersion(payload)
+
   const voltage = extractVoltageValue(payload)
 
   if (voltage === null) {
     resetEsp32ReadingState()
     esp32LinkState.value = 'measuring'
-    esp32StatusMessage.value = 'BLE connected, waiting for voltage'
+    esp32StatusMessage.value = 'BLE connected, waiting for voltage payload'
     return
   }
 
@@ -722,7 +770,7 @@ function consumeBleMeasurementPayload(payload: Record<string, any>) {
   }
 
   esp32LinkState.value = 'ready'
-  esp32StatusMessage.value = `${voltage.toFixed(2)}V captured from BLE`
+  esp32StatusMessage.value = `${voltage.toFixed(2)}V captured from ${blePayloadDeviceId || BLE_DEVICE_ID_PREFIX}`
   setVoltage(voltage, 'esp32')
 }
 
@@ -781,7 +829,7 @@ async function connectBleDevice() {
     bleDevice = await navigator.bluetooth.requestDevice({
       filters: [
         { services: [BLE_SERVICE_UUID] },
-        { namePrefix: 'ESP32-LIFTER' },
+        { namePrefix: BLE_DEVICE_NAME_PREFIX },
       ],
       optionalServices: [BLE_SERVICE_UUID],
     })
@@ -889,7 +937,8 @@ async function finalizeIfReady() {
     toSlot: draft.toSlot,
     scanSource: lastScanSource.value,
     voltageSource: lastVoltageSource.value,
-    deviceId: lastVoltageSource.value === 'esp32' ? 'ESP32-LIFTER-01' : null,
+    deviceId: lastVoltageSource.value === 'esp32' ? blePayloadDeviceId : null,
+    firmwareVersion: lastVoltageSource.value === 'esp32' ? blePayloadFirmwareVersion : null,
   }
 
   try {
@@ -915,6 +964,7 @@ async function finalizeIfReady() {
       toRack: draft.toRack,
       toSlot: draft.toSlot,
       savedAt: new Date().toISOString(),
+      firmwareVersion: blePayloadFirmwareVersion,
       syncStatus: 'local',
     }
 
@@ -1483,6 +1533,10 @@ onBeforeUnmount(() => {
           <div class="mt-1 text-[11px] text-slate-600">
             BLE device:
             <span class="font-semibold text-slate-950">{{ bleConnectionLabel }}</span>
+          </div>
+          <div class="mt-1 text-[11px] text-slate-600">
+            BLE identity:
+            <span class="font-semibold text-slate-950">{{ bleIdentityDetail }}</span>
           </div>
           <div class="mt-2 grid grid-cols-2 gap-2">
               <UButton

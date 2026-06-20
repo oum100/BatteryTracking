@@ -14,6 +14,7 @@ interface MovementRecord {
   scanSource: string | null
   voltageSource: string | null
   deviceId: string | null
+  firmwareVersion: string | null
   notes: string | null
   createdAt: string
   updatedAt: string
@@ -116,6 +117,7 @@ const filteredRecords = computed(() => {
       record.scanSource ?? '',
       record.voltageSource ?? '',
       record.deviceId ?? '',
+      record.firmwareVersion ?? '',
     ].join(' ').toLowerCase()
 
     return haystack.includes(query)
@@ -391,6 +393,9 @@ onMounted(() => {
             </span>
             <span class="rounded-md bg-white/90 px-2 py-1 text-slate-700 shadow-sm">
               Device: <strong class="text-slate-950">{{ record.deviceId || '-' }}</strong>
+            </span>
+            <span class="rounded-md bg-white/90 px-2 py-1 text-slate-700 shadow-sm">
+              FW: <strong class="text-slate-950">{{ record.firmwareVersion || '-' }}</strong>
             </span>
           </div>
         </UCard>

@@ -42,6 +42,7 @@ model BatteryMovement {
   scanSource        String?
   voltageSource     String?
   deviceId          String?
+  firmwareVersion   String?
   notes             String?
   createdAt         DateTime      @default(now())
   updatedAt         DateTime      @updatedAt

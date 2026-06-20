@@ -156,7 +156,9 @@ export default defineEventHandler((event) => {
   return {
     ok: true,
     mock: true,
-    deviceId: 'ESP32-MOCK-01',
+    deviceId: 'PUMA-VoltMeter-MOCK01',
+    fw: 'mock-2026.06.20',
+    firmwareVersion: 'mock-2026.06.20',
     sampledAt: new Date().toISOString(),
     ...payload,
     hints: {

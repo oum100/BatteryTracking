@@ -15,6 +15,7 @@ interface MovementPayload {
   scanSource?: string
   voltageSource?: string
   deviceId?: string
+  firmwareVersion?: string
   notes?: string
 }
 
@@ -86,6 +87,7 @@ export default defineEventHandler(async (event) => {
       scanSource: body.scanSource?.trim() || null,
       voltageSource: body.voltageSource?.trim() || null,
       deviceId: body.deviceId?.trim() || null,
+      firmwareVersion: body.firmwareVersion?.trim() || null,
       notes: body.notes?.trim() || null,
     },
   })

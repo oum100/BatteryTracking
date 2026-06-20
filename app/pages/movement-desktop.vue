@@ -16,6 +16,7 @@ interface MovementRecord {
   scanSource: string | null
   voltageSource: string | null
   deviceId: string | null
+  firmwareVersion: string | null
   notes: string | null
   createdAt: string
   updatedAt: string
@@ -34,6 +35,7 @@ interface MovementForm {
   scanSource: string
   voltageSource: string
   deviceId: string
+  firmwareVersion: string
   notes: string
 }
 
@@ -102,6 +104,7 @@ const emptyForm = (): MovementForm => ({
   scanSource: '',
   voltageSource: '',
   deviceId: '',
+  firmwareVersion: '',
   notes: '',
 })
 
@@ -198,6 +201,7 @@ const filteredRecords = computed(() => {
       record.scanSource ?? '',
       record.voltageSource ?? '',
       record.deviceId ?? '',
+      record.firmwareVersion ?? '',
       record.notes ?? '',
     ].join(' ').toLowerCase()
 
@@ -416,6 +420,7 @@ function openEdit(record: MovementRecord) {
     scanSource: record.scanSource ?? '',
     voltageSource: record.voltageSource ?? '',
     deviceId: record.deviceId ?? '',
+    firmwareVersion: record.firmwareVersion ?? '',
     notes: record.notes ?? '',
   })
   formError.value = ''
@@ -454,6 +459,7 @@ async function saveRecord() {
       scanSource: form.scanSource || null,
       voltageSource: form.voltageSource || null,
       deviceId: form.deviceId || null,
+      firmwareVersion: form.firmwareVersion || null,
       notes: form.notes || null,
     }
 
@@ -516,6 +522,7 @@ async function exportExcel() {
     ScanSource: record.scanSource ?? '',
     VoltageSource: record.voltageSource ?? '',
     DeviceId: record.deviceId ?? '',
+    FirmwareVersion: record.firmwareVersion ?? '',
     Notes: record.notes ?? '',
     CreatedAt: record.createdAt,
   }))
@@ -896,6 +903,8 @@ async function exportPdf() {
                 <UInput v-model="form.toSlot" placeholder="To Slot" :ui="{ base: '!min-h-11 !bg-white !px-3 !py-2 !text-sm !text-slate-950' }" />
                 <UInput v-model="form.scanSource" placeholder="Scan Source" :ui="{ base: '!min-h-11 !bg-white !px-3 !py-2 !text-sm !text-slate-950' }" />
                 <UInput v-model="form.voltageSource" placeholder="Voltage Source" :ui="{ base: '!min-h-11 !bg-white !px-3 !py-2 !text-sm !text-slate-950' }" />
+                <UInput v-model="form.deviceId" placeholder="Device ID" :ui="{ base: '!min-h-11 !bg-white !px-3 !py-2 !text-sm !text-slate-950' }" />
+                <UInput v-model="form.firmwareVersion" placeholder="Firmware Version" :ui="{ base: '!min-h-11 !bg-white !px-3 !py-2 !text-sm !text-slate-950' }" />
               </div>
 
               <UAlert
@@ -967,6 +976,7 @@ async function exportPdf() {
                 <td class="px-3 py-3">
                   <div class="font-bold text-slate-950">{{ record.batterySn }}</div>
                   <div class="mt-1 text-xs text-slate-500">{{ record.deviceId || '-' }}</div>
+                  <div class="text-xs text-slate-500">{{ record.firmwareVersion || '-' }}</div>
                 </td>
                 <td class="px-3 py-3">
                   <div class="font-semibold text-slate-950">{{ record.fromRack }}</div>
