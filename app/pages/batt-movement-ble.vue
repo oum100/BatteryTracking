@@ -5,6 +5,7 @@ type WorkflowStep = 'from' | 'voltage' | 'battery' | 'to' | 'save'
 type ScanSource = 'camera' | 'scanner' | 'manual'
 type VoltageSource = 'esp32' | 'manual' | 'mock'
 type Esp32LinkState = 'disconnected' | 'connecting' | 'measuring' | 'ready' | 'error'
+type EndpointMode = 'ble' | 'mock'
 
 interface MovementDraft {
   stage: MovementStage
@@ -26,7 +27,9 @@ interface MovementRecord extends MovementDraft {
 
 const STORAGE_KEY = 'battery-movement-v1-records'
 const COUNT_OFFSET_KEY = 'battery-movement-v1-count-offset'
+const ENDPOINT_MODE_KEY = 'battery-movement-v1-endpoint-mode'
 const API_ENDPOINT = '/api/battery-movements'
+const MOCK_API_ENDPOINT = '/api/mock/esp32-voltage'
 const BLE_SERVICE_UUID = '7f9e0001-6a9d-4f7e-8d4d-32e7be6f1001'
 const BLE_CHARACTERISTIC_UUID = '7f9e0002-6a9d-4f7e-8d4d-32e7be6f1001'
 const BLE_DEVICE_NAME = 'PUMA-Voltmeter'
@@ -61,6 +64,7 @@ const showSimulateTest = ref(false)
 const isSavingRecord = ref(false)
 const esp32LinkState = ref<Esp32LinkState>('disconnected')
 const esp32StatusMessage = ref('Connect BLE device, then wait for STEP 3')
+const endpointMode = ref<EndpointMode>('mock')
 const lastScanSource = ref<ScanSource | null>(null)
 const lastVoltageSource = ref<VoltageSource | null>(null)
 const log = ref('Start camera, scan with scanner gun, or use manual scan to begin a movement record.')
@@ -70,6 +74,7 @@ const bleConnected = ref(false)
 
 let mediaStream: MediaStream | null = null
 let detectorTimer: ReturnType<typeof setInterval> | null = null
+let esp32PollTimer: ReturnType<typeof setInterval> | null = null
 let lastDetection = 0
 let audioContext: AudioContext | null = null
 let scannerBuffer = ''
@@ -384,6 +389,7 @@ const bleIdentityDetail = computed(() => {
 
   return details.length ? details.join(' • ') : 'Waiting for BLE payload'
 })
+const endpointModeLabel = computed(() => endpointMode.value === 'mock' ? 'Mock API' : 'BLE VoltMeter')
 
 function ensureAudioContext() {
   if (typeof window === 'undefined' || !('AudioContext' in window)) {
@@ -565,12 +571,29 @@ function loadCountOffset() {
   countOffset.value = Number.isFinite(value) ? value : 0
 }
 
+function loadEndpointMode() {
+  if (typeof localStorage === 'undefined') {
+    return
+  }
+
+  const savedMode = localStorage.getItem(ENDPOINT_MODE_KEY)
+  endpointMode.value = savedMode === 'ble' ? 'ble' : 'mock'
+}
+
 function saveCountOffset() {
   if (typeof localStorage === 'undefined') {
     return
   }
 
   localStorage.setItem(COUNT_OFFSET_KEY, String(countOffset.value))
+}
+
+function saveEndpointMode() {
+  if (typeof localStorage === 'undefined') {
+    return
+  }
+
+  localStorage.setItem(ENDPOINT_MODE_KEY, endpointMode.value)
 }
 
 function resetCount() {
@@ -720,6 +743,13 @@ function disconnectBleDevice() {
   resetEsp32ReadingState()
 }
 
+function stopEsp32Polling() {
+  if (esp32PollTimer) {
+    clearInterval(esp32PollTimer)
+    esp32PollTimer = null
+  }
+}
+
 function handleBleDisconnect() {
   disconnectBleDevice()
   esp32LinkState.value = 'disconnected'
@@ -772,6 +802,44 @@ function consumeBleMeasurementPayload(payload: Record<string, any>) {
   esp32LinkState.value = 'ready'
   esp32StatusMessage.value = `${voltage.toFixed(2)}V captured from ${blePayloadDeviceId || BLE_DEVICE_ID_PREFIX}`
   setVoltage(voltage, 'esp32')
+}
+
+function consumeEndpointMeasurementPayload(payload: Record<string, any>) {
+  const payloadDeviceId = String(payload.id ?? payload.deviceId ?? '').trim()
+
+  if (payloadDeviceId) {
+    blePayloadDeviceId = payloadDeviceId
+  }
+
+  blePayloadFirmwareVersion = extractFirmwareVersion(payload)
+
+  const voltage = extractVoltageValue(payload)
+
+  if (voltage === null) {
+    resetEsp32ReadingState()
+    esp32LinkState.value = 'measuring'
+    esp32StatusMessage.value = 'Waiting for voltage payload'
+    return
+  }
+
+  if (esp32LastVoltage !== null && Math.abs(esp32LastVoltage - voltage) <= 0.12) {
+    esp32StableHits += 1
+  } else {
+    esp32StableHits = 1
+  }
+
+  esp32LastVoltage = voltage
+
+  if (!payloadIndicatesStable(payload, voltage)) {
+    esp32LinkState.value = 'measuring'
+    esp32StatusMessage.value = `Waiting stable value (${voltage.toFixed(2)}V • hit ${esp32StableHits}/2)`
+    return
+  }
+
+  esp32LinkState.value = 'ready'
+  esp32StatusMessage.value = `${voltage.toFixed(2)}V captured`
+  setVoltage(voltage, payload.mock ? 'mock' : 'esp32')
+  stopEsp32Polling()
 }
 
 function parseBleMeasurement(rawValue: string) {
@@ -862,6 +930,69 @@ async function connectBleDevice() {
   }
 }
 
+async function pollMockApiVoltage() {
+  if (workflowStep.value !== 'voltage' || draft.voltage !== null || endpointMode.value !== 'mock') {
+    stopEsp32Polling()
+    return
+  }
+
+  try {
+    esp32LinkState.value = esp32LinkState.value === 'disconnected' ? 'connecting' : 'measuring'
+    esp32StatusMessage.value = 'Requesting voltage from Mock API'
+
+    const response = await fetch(MOCK_API_ENDPOINT, {
+      method: 'GET',
+      headers: {
+        Accept: 'application/json',
+      },
+      cache: 'no-store',
+    })
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`)
+    }
+
+    const payload = await response.json() as Record<string, any>
+    consumeEndpointMeasurementPayload(payload)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unable to reach Mock API'
+    esp32LinkState.value = 'error'
+    esp32StatusMessage.value = message
+  }
+}
+
+function startEsp32Polling() {
+  if (esp32PollTimer || workflowStep.value !== 'voltage' || draft.voltage !== null || endpointMode.value !== 'mock') {
+    return
+  }
+
+  esp32LinkState.value = 'connecting'
+  esp32StatusMessage.value = 'Connecting to Mock API'
+  void pollMockApiVoltage()
+  esp32PollTimer = window.setInterval(() => {
+    void pollMockApiVoltage()
+  }, 900)
+}
+
+function useMockApiMode() {
+  endpointMode.value = 'mock'
+  saveEndpointMode()
+  disconnectBleDevice()
+  resetEsp32ReadingState()
+  esp32StatusMessage.value = 'Mock API ready'
+  if (workflowStep.value === 'voltage' && draft.voltage === null) {
+    startEsp32Polling()
+  }
+}
+
+function useBleMode() {
+  endpointMode.value = 'ble'
+  saveEndpointMode()
+  stopEsp32Polling()
+  resetEsp32ReadingState()
+  esp32StatusMessage.value = bleConnected.value ? `${bleDeviceName.value} connected` : 'Tap Connect BLE before reading voltage'
+}
+
 function parseRackSlot(value: string) {
   const trimmed = value.trim().toUpperCase()
   const normalized = trimmed.replace(/\s+/g, '')
@@ -937,8 +1068,8 @@ async function finalizeIfReady() {
     toSlot: draft.toSlot,
     scanSource: lastScanSource.value,
     voltageSource: lastVoltageSource.value,
-    deviceId: lastVoltageSource.value === 'esp32' ? blePayloadDeviceId : null,
-    firmwareVersion: lastVoltageSource.value === 'esp32' ? blePayloadFirmwareVersion : null,
+    deviceId: (lastVoltageSource.value === 'esp32' || lastVoltageSource.value === 'mock') ? blePayloadDeviceId : null,
+    firmwareVersion: (lastVoltageSource.value === 'esp32' || lastVoltageSource.value === 'mock') ? blePayloadFirmwareVersion : null,
   }
 
   try {
@@ -1314,6 +1445,7 @@ async function startCamera() {
 onMounted(() => {
   void loadRecords()
   loadCountOffset()
+  loadEndpointMode()
   draft.stage = stage.value
   focusScannerCapture()
   window.addEventListener('keydown', handleScannerKeydown)
@@ -1330,6 +1462,12 @@ watch(records, () => {
 
 watch(workflowStep, (nextStep) => {
   if (nextStep === 'voltage' && draft.voltage === null) {
+    if (endpointMode.value === 'mock') {
+      startEsp32Polling()
+      return
+    }
+
+    stopEsp32Polling()
     if (!bleConnected.value) {
       esp32LinkState.value = 'disconnected'
       esp32StatusMessage.value = 'Tap Connect BLE before reading voltage'
@@ -1351,12 +1489,16 @@ watch(workflowStep, (nextStep) => {
     return
   }
 
+  stopEsp32Polling()
   esp32LinkState.value = 'disconnected'
-  esp32StatusMessage.value = bleConnected.value ? 'Voltage will be requested from BLE at STEP 3' : 'Connect BLE device, then wait for STEP 3'
+  esp32StatusMessage.value = endpointMode.value === 'mock'
+    ? 'Mock API ready'
+    : (bleConnected.value ? `${bleDeviceName.value} connected` : 'Tap Connect BLE before reading voltage')
 }, { immediate: true })
 
 onBeforeUnmount(() => {
   stopCamera()
+  stopEsp32Polling()
   disconnectBleDevice()
   window.removeEventListener('keydown', handleScannerKeydown)
   window.removeEventListener('pointerdown', handleWindowPointerFocus)
@@ -1518,27 +1660,43 @@ onBeforeUnmount(() => {
         <UCard :ui="{ root: 'mt-2 rounded-md bg-white/85 text-slate-700 shadow-[0_2px_8px_rgba(15,23,42,0.05)]', body: 'px-3 py-2 sm:px-3 sm:py-2' }">
           <div class="flex items-start justify-between gap-2">
             <div class="min-w-0">
-              <div class="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">BLE ESP32 Status</div>
+              <div class="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">BLE VOLTMETER STATUS</div>
               <div class="mt-0.5 text-sm font-bold" :class="esp32Status.tone">{{ esp32Status.title }}</div>
-              <div class="text-[11px] text-slate-600">{{ esp32Status.detail }}</div>
+              <div v-if="esp32Status.detail" class="text-[11px] text-slate-600">{{ esp32Status.detail }}</div>
             </div>
             <span class="shrink-0 rounded-md px-2 py-1 text-[11px] font-bold" :class="esp32Status.chip">
-              {{ bleTransportStatusLabel }}
+              {{ endpointModeLabel }}
             </span>
           </div>
-          <div class="mt-1 text-[11px] text-slate-600">
-            Browser support:
-            <span class="font-semibold text-slate-950">{{ bleSupported ? 'Web Bluetooth Ready' : 'Web Bluetooth Missing' }}</span>
-          </div>
-          <div class="mt-1 text-[11px] text-slate-600">
-            BLE device:
-            <span class="font-semibold text-slate-950">{{ bleConnectionLabel }}</span>
-          </div>
-          <div class="mt-1 text-[11px] text-slate-600">
-            BLE identity:
-            <span class="font-semibold text-slate-950">{{ bleIdentityDetail }}</span>
+          <div class="mt-2 text-[11px] text-slate-600">
+            Last voltage source:
+            <span class="font-semibold text-slate-950">{{ lastVoltageSourceLabel }}</span>
           </div>
           <div class="mt-2 grid grid-cols-2 gap-2">
+            <UButton
+              size="sm"
+              color="neutral"
+              :variant="endpointMode === 'mock' ? 'solid' : 'soft'"
+              :class="endpointMode === 'mock'
+                ? 'border border-lime-800 bg-lime-800 text-white hover:bg-lime-700'
+                : 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-50'"
+              @click="useMockApiMode"
+            >
+              {{ endpointMode === 'mock' ? 'Using Mock API' : 'Use Mock API' }}
+            </UButton>
+            <UButton
+              size="sm"
+              color="neutral"
+              :variant="endpointMode === 'ble' ? 'solid' : 'soft'"
+              :class="endpointMode === 'ble'
+                ? 'border border-sky-800 bg-sky-800 text-white hover:bg-sky-700'
+                : 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-50'"
+              @click="useBleMode"
+            >
+              {{ endpointMode === 'ble' ? 'Using BLE VoltMeter' : 'Use BLE VoltMeter' }}
+            </UButton>
+          </div>
+          <div v-if="endpointMode === 'ble'" class="mt-2 grid grid-cols-2 gap-2">
               <UButton
                 size="sm"
                 color="neutral"
@@ -1546,7 +1704,7 @@ onBeforeUnmount(() => {
                 class="border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
                 @click="connectBleDevice"
               >
-                {{ bleConnected ? 'BLE Connected' : 'Connect BLE' }}
+                {{ bleConnected ? 'BLE VoltMeter Connected' : 'Connect BLE VoltMeter' }}
               </UButton>
               <UButton
                 size="sm"
@@ -1558,15 +1716,8 @@ onBeforeUnmount(() => {
                 Disconnect
               </UButton>
             </div>
-          <div class="mt-2 text-[11px] text-slate-600">
-            Last voltage source:
-            <span class="font-semibold text-slate-950">{{ lastVoltageSourceLabel }}</span>
-          </div>
-          <div class="mt-2 text-[11px] text-slate-600">
-            BLE requirement:
-            <span class="font-semibold text-slate-950">
-              {{ bleSupported ? 'Use Chrome/Android and grant Bluetooth permission' : 'Browser may not support Web Bluetooth or page is not in a secure context' }}
-            </span>
+          <div v-if="endpointMode === 'ble' && blePayloadDeviceId" class="mt-1 text-[11px] text-slate-600">
+            <span class="font-semibold text-slate-950">{{ bleIdentityDetail }}</span>
           </div>
         </UCard>
 
@@ -1635,7 +1786,7 @@ onBeforeUnmount(() => {
       >
         <div class="flex items-center justify-between gap-2">
           <div class="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500">
-            Simulate Test
+            Manual Tools
           </div>
           <UButton
             size="sm"
