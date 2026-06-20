@@ -9,6 +9,7 @@ const char* BLE_DEVICE_NAME = "ESP32C3_BLE-BATTMETER-01";
 
 const char* MEASUREMENT_SERVICE_UUID = "7f9e0001-6a9d-4f7e-8d4d-32e7be6f1001";
 const char* MEASUREMENT_CHARACTERISTIC_UUID = "7f9e0002-6a9d-4f7e-8d4d-32e7be6f1001";
+const uint16_t MEASUREMENT_CHARACTERISTIC_MAX_LEN = 384;
 
 #ifndef A0
 #define A0 0
@@ -187,29 +188,21 @@ String buildMeasurementPayload() {
   const bool triggered = isTriggered();
 
   JsonDocument doc;
-  doc["deviceId"] = DEVICE_ID;
-  doc["transport"] = "ble";
-  doc["sampledAt"] = "";
-  doc["sampledAtMs"] = sampledAtMs;
-  doc["triggered"] = triggered;
-  doc["switchPressed"] = triggered;
-  doc["contact"] = triggered;
-  doc["probeContact"] = triggered;
-  doc["measureEnabled"] = triggered;
-  doc["liftSwitchUsed"] = USE_LIFT_SWITCH;
-  doc["mockVoltageUsed"] = USE_MOCK_VOLTAGE;
-  doc["rgbLedUsed"] = USE_RGB_LED;
+  doc["id"] = DEVICE_ID;
+  doc["t"] = sampledAtMs;
+  doc["tr"] = triggered ? 1 : 0;
+  doc["ls"] = USE_LIFT_SWITCH ? 1 : 0;
+  doc["mv"] = USE_MOCK_VOLTAGE ? 1 : 0;
+  doc["rgb"] = USE_RGB_LED ? 1 : 0;
 
   if (!triggered) {
-    doc["status"] = "idle";
-    doc["state"] = "idle";
-    doc["stable"] = false;
-    doc["voltage"] = 0.0;
+    doc["s"] = "idle";
+    doc["st"] = 0;
+    doc["v"] = 0.0;
   } else {
-    doc["status"] = isStable ? "ready" : "measuring";
-    doc["state"] = isStable ? "ready" : "measuring";
-    doc["stable"] = isStable;
-    doc["voltage"] = lastAverageVoltage;
+    doc["s"] = isStable ? "ready" : "measuring";
+    doc["st"] = isStable ? 1 : 0;
+    doc["v"] = lastAverageVoltage;
   }
 
   String payload;
@@ -287,7 +280,8 @@ void setupBle() {
   NimBLEService* service = bleServer->createService(MEASUREMENT_SERVICE_UUID);
   measurementCharacteristic = service->createCharacteristic(
     MEASUREMENT_CHARACTERISTIC_UUID,
-    NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY
+    NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY,
+    MEASUREMENT_CHARACTERISTIC_MAX_LEN
   );
 
   measurementPayload = buildMeasurementPayload();
@@ -345,7 +339,9 @@ void updateBleCharacteristic() {
   static unsigned long lastNotifyLogAt = 0;
   if (millis() - lastNotifyLogAt >= 1000) {
     lastNotifyLogAt = millis();
-    Serial.print("[BLE] notify payload: ");
+    Serial.print("[BLE] notify len=");
+    Serial.print(measurementPayload.length());
+    Serial.print(" payload: ");
     Serial.println(measurementPayload);
   }
 }

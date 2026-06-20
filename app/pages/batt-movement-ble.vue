@@ -317,6 +317,15 @@ const lastVoltageSourceLabel = computed(() => {
 })
 
 const esp32Status = computed(() => {
+  if (bleConnected.value && workflowStep.value !== 'voltage' && draft.voltage === null) {
+    return {
+      title: 'BLE Connected',
+      detail: 'Voltage will be requested from BLE at STEP 3',
+      tone: 'text-sky-950',
+      chip: 'bg-sky-100 text-sky-950',
+    }
+  }
+
   if (esp32LinkState.value === 'ready' && draft.voltage !== null) {
     return {
       title: 'Voltage Ready',
@@ -354,12 +363,14 @@ const esp32Status = computed(() => {
   }
 
   return {
-    title: esp32LinkState.value === 'disconnected' ? 'Disconnected' : 'Standby',
+    title: bleConnected.value ? 'BLE Connected' : esp32LinkState.value === 'disconnected' ? 'Disconnected' : 'Standby',
     detail: esp32StatusMessage.value,
     tone: 'text-slate-950',
     chip: 'bg-slate-100 text-slate-950',
   }
 })
+
+const bleTransportStatusLabel = computed(() => bleConnected.value ? 'BLE Linked' : 'BLE Offline')
 
 function ensureAudioContext() {
   if (typeof window === 'undefined' || !('AudioContext' in window)) {
@@ -593,6 +604,7 @@ function resetEsp32ReadingState() {
 
 function extractVoltageValue(payload: Record<string, any>) {
   const candidates = [
+    payload.v,
     payload.voltage,
     payload.value,
     payload.reading,
@@ -612,12 +624,20 @@ function extractVoltageValue(payload: Record<string, any>) {
 }
 
 function payloadIndicatesStable(payload: Record<string, any>, voltage: number | null) {
-  if (payload.stable === true || payload.ready === true || payload.state === 'ready' || payload.status === 'ready') {
+  if (
+    payload.stable === true
+    || payload.st === 1
+    || payload.ready === true
+    || payload.state === 'ready'
+    || payload.status === 'ready'
+    || payload.s === 'ready'
+  ) {
     return true
   }
 
   if (
     payload.triggered === false
+    || payload.tr === 0
     || payload.switchPressed === false
     || payload.contact === false
     || payload.probeContact === false
@@ -630,7 +650,8 @@ function payloadIndicatesStable(payload: Record<string, any>, voltage: number | 
     && voltage >= 2
     && esp32StableHits >= 2
     && (
-      payload.triggered !== false
+      payload.tr === 1
+      || payload.triggered !== false
       || payload.switchPressed === true
       || payload.contact === true
       || payload.probeContact === true
@@ -707,25 +728,29 @@ function consumeBleMeasurementPayload(payload: Record<string, any>) {
 
 function parseBleMeasurement(rawValue: string) {
   try {
-    const payload = JSON.parse(rawValue) as Record<string, any>
+    const normalized = rawValue.trim()
+    const start = normalized.indexOf('{')
+    const end = normalized.lastIndexOf('}')
+    const candidate = start >= 0 && end > start ? normalized.slice(start, end + 1) : normalized
+    const payload = JSON.parse(candidate) as Record<string, any>
     consumeBleMeasurementPayload(payload)
   }
   catch {
+    if (workflowStep.value !== 'voltage' || draft.voltage !== null) {
+      return
+    }
+
     esp32LinkState.value = 'error'
     esp32StatusMessage.value = 'BLE payload is not valid JSON'
   }
 }
 
 function handleBleMeasurementEvent(event: Event) {
-  const target = event.target as BluetoothRemoteGATTCharacteristic | null
-  const value = target?.value
-
-  if (!value) {
+  if (workflowStep.value !== 'voltage' || draft.voltage !== null) {
     return
   }
 
-  const raw = textDecoder.decode(value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength))
-  parseBleMeasurement(raw)
+  void readBleMeasurementOnce()
 }
 
 async function readBleMeasurementOnce() {
@@ -1448,7 +1473,7 @@ onBeforeUnmount(() => {
               <div class="text-[11px] text-slate-600">{{ esp32Status.detail }}</div>
             </div>
             <span class="shrink-0 rounded-md px-2 py-1 text-[11px] font-bold" :class="esp32Status.chip">
-              {{ bleConnected ? 'BLE Linked' : 'BLE Idle' }}
+              {{ bleTransportStatusLabel }}
             </span>
           </div>
           <div class="mt-1 text-[11px] text-slate-600">
