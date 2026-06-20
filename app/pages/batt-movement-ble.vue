@@ -1463,7 +1463,7 @@ onBeforeUnmount(() => {
               <UButton
                 size="sm"
                 color="neutral"
-                :disabled="!bleSupported || bleConnected"
+                :disabled="bleConnected"
                 class="border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
                 @click="connectBleDevice"
               >
@@ -1482,6 +1482,12 @@ onBeforeUnmount(() => {
           <div class="mt-2 text-[11px] text-slate-600">
             Last voltage source:
             <span class="font-semibold text-slate-950">{{ lastVoltageSourceLabel }}</span>
+          </div>
+          <div class="mt-2 text-[11px] text-slate-600">
+            BLE requirement:
+            <span class="font-semibold text-slate-950">
+              {{ bleSupported ? 'Use Chrome/Android and grant Bluetooth permission' : 'Browser may not support Web Bluetooth or page is not in a secure context' }}
+            </span>
           </div>
         </UCard>
 
