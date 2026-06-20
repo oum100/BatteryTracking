@@ -296,8 +296,15 @@ void setupBle() {
   service->start();
 
   NimBLEAdvertising* advertising = NimBLEDevice::getAdvertising();
-  advertising->addServiceUUID(MEASUREMENT_SERVICE_UUID);
-  advertising->setName(BLE_DEVICE_NAME);
+  NimBLEAdvertisementData advertisingData;
+  NimBLEAdvertisementData scanResponseData;
+
+  advertisingData.setFlags(0x06);
+  advertisingData.setCompleteServices(NimBLEUUID(MEASUREMENT_SERVICE_UUID));
+  scanResponseData.setName(BLE_DEVICE_NAME);
+
+  advertising->setAdvertisementData(advertisingData);
+  advertising->setScanResponseData(scanResponseData);
   advertising->start();
 
   Serial.println("[BLE] advertising started.");
