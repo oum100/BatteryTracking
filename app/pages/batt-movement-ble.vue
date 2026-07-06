@@ -1803,23 +1803,6 @@ onBeforeUnmount(() => {
             Last voltage source:
             <span class="font-semibold text-slate-950">{{ lastVoltageSourceLabel }}</span>
           </div>
-          <div class="mt-2 grid grid-cols-3 gap-2 text-[11px]">
-            <div class="rounded-md bg-slate-100 px-2 py-2">
-              <div class="font-semibold uppercase tracking-[0.14em] text-slate-500">Raw BLE</div>
-              <div class="mt-1 text-sm font-bold text-slate-950">{{ rawVoltageLabel }}</div>
-            </div>
-            <div class="rounded-md bg-slate-100 px-2 py-2">
-              <div class="font-semibold uppercase tracking-[0.14em] text-slate-500">Offset</div>
-              <div class="mt-1 text-sm font-bold text-slate-950">{{ calibrationOffsetLabel }}</div>
-            </div>
-            <div class="rounded-md bg-slate-100 px-2 py-2">
-              <div class="font-semibold uppercase tracking-[0.14em] text-slate-500">Calibrated</div>
-              <div class="mt-1 text-sm font-bold text-slate-950">{{ calibratedVoltagePreviewLabel }}</div>
-            </div>
-          </div>
-          <div class="mt-2 text-[11px] text-slate-600">
-            {{ calibrationReferenceLabel }}
-          </div>
           <div class="mt-2 grid grid-cols-2 gap-2">
             <UButton
               size="sm"
@@ -1863,49 +1846,9 @@ onBeforeUnmount(() => {
               >
                 Disconnect
               </UButton>
-            </div>
+          </div>
           <div v-if="endpointMode === 'ble' && blePayloadDeviceId" class="mt-1 text-[11px] text-slate-600">
             <span class="font-semibold text-slate-950">{{ bleIdentityDetail }}</span>
-          </div>
-          <div class="mt-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-3">
-            <div class="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-              Auto Calibrate
-            </div>
-            <div class="mt-1 text-[11px] text-slate-600">
-              ใส่ค่าที่วัดจริงจากมิเตอร์ แล้วใช้ค่า BLE ล่าสุดเป็นตัวอ้างอิงเพื่อคำนวณ offset อัตโนมัติ
-            </div>
-            <div class="mt-2 grid grid-cols-[1fr_auto] gap-2">
-              <UInput
-                v-model="meterReferenceVoltage"
-                type="number"
-                step="0.01"
-                placeholder="Meter reference e.g. 12.61"
-                :ui="{ base: '!min-h-10 !bg-white !px-3 !py-2 !text-sm !text-slate-950 !placeholder:text-slate-400' }"
-              />
-              <UButton
-                color="neutral"
-                variant="soft"
-                :class="stageMeta.action"
-                @click="autoCalibrateVoltage"
-              >
-                Auto Calibrate
-              </UButton>
-            </div>
-            <div class="mt-2 grid grid-cols-2 gap-2">
-              <UButton
-                size="sm"
-                color="neutral"
-                variant="soft"
-                class="border border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
-                @click="resetCalibration"
-              >
-                Reset Cal
-              </UButton>
-              <div class="rounded-md bg-white px-2 py-2 text-[11px] text-slate-600 shadow-[0_2px_8px_rgba(15,23,42,0.04)]">
-                Current draft voltage:
-                <span class="font-semibold text-slate-950">{{ draft.voltage !== null ? `${draft.voltage.toFixed(2)}V` : '-' }}</span>
-              </div>
-            </div>
           </div>
         </UCard>
 
@@ -2040,6 +1983,87 @@ onBeforeUnmount(() => {
               </UButton>
             </div>
           </UCard>
+        </div>
+      </UCard>
+
+      <UCard
+        :ui="{
+          root: 'rounded-md ring-0 bg-white/88 shadow-[0_14px_30px_rgba(15,23,42,0.06)]',
+          body: 'p-3 sm:p-3',
+        }"
+      >
+        <div class="flex items-center justify-between gap-2">
+          <div>
+            <div class="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500">
+              Advanced
+            </div>
+            <div class="mt-1 text-sm font-bold text-slate-950">
+              BLE Voltage Calibration
+            </div>
+          </div>
+          <div class="rounded-md bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-950">
+            Offset {{ calibrationOffsetLabel }}
+          </div>
+        </div>
+
+        <div class="mt-3 grid grid-cols-3 gap-2 text-[11px]">
+          <div class="rounded-md bg-slate-50 px-2 py-2">
+            <div class="font-semibold uppercase tracking-[0.14em] text-slate-500">Raw BLE</div>
+            <div class="mt-1 text-sm font-bold text-slate-950">{{ rawVoltageLabel }}</div>
+          </div>
+          <div class="rounded-md bg-slate-50 px-2 py-2">
+            <div class="font-semibold uppercase tracking-[0.14em] text-slate-500">Offset</div>
+            <div class="mt-1 text-sm font-bold text-slate-950">{{ calibrationOffsetLabel }}</div>
+          </div>
+          <div class="rounded-md bg-slate-50 px-2 py-2">
+            <div class="font-semibold uppercase tracking-[0.14em] text-slate-500">Calibrated</div>
+            <div class="mt-1 text-sm font-bold text-slate-950">{{ calibratedVoltagePreviewLabel }}</div>
+          </div>
+        </div>
+
+        <div class="mt-2 text-[11px] text-slate-600">
+          {{ calibrationReferenceLabel }}
+        </div>
+
+        <div class="mt-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-3">
+          <div class="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+            Auto Calibrate
+          </div>
+          <div class="mt-1 text-[11px] text-slate-600">
+            ใส่ค่าที่วัดจริงจากมิเตอร์ แล้วใช้ค่า BLE ล่าสุดเป็นตัวอ้างอิงเพื่อคำนวณ offset อัตโนมัติ
+          </div>
+          <div class="mt-2 grid grid-cols-[1fr_auto] gap-2">
+            <UInput
+              v-model="meterReferenceVoltage"
+              type="number"
+              step="0.01"
+              placeholder="Meter reference e.g. 12.61"
+              :ui="{ base: '!min-h-10 !bg-white !px-3 !py-2 !text-sm !text-slate-950 !placeholder:text-slate-400' }"
+            />
+            <UButton
+              color="neutral"
+              variant="soft"
+              :class="stageMeta.action"
+              @click="autoCalibrateVoltage"
+            >
+              Auto Calibrate
+            </UButton>
+          </div>
+          <div class="mt-2 grid grid-cols-2 gap-2">
+            <UButton
+              size="sm"
+              color="neutral"
+              variant="soft"
+              class="border border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+              @click="resetCalibration"
+            >
+              Reset Cal
+            </UButton>
+            <div class="rounded-md bg-white px-2 py-2 text-[11px] text-slate-600 shadow-[0_2px_8px_rgba(15,23,42,0.04)]">
+              Current draft voltage:
+              <span class="font-semibold text-slate-950">{{ draft.voltage !== null ? `${draft.voltage.toFixed(2)}V` : '-' }}</span>
+            </div>
+          </div>
         </div>
       </UCard>
     </section>
