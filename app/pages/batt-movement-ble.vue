@@ -28,6 +28,7 @@ interface MovementRecord extends MovementDraft {
 const STORAGE_KEY = 'battery-movement-v1-records'
 const COUNT_OFFSET_KEY = 'battery-movement-v1-count-offset'
 const ENDPOINT_MODE_KEY = 'battery-movement-v1-endpoint-mode'
+const CALIBRATION_STORAGE_KEY = 'battery-movement-v1-ble-calibration'
 const API_ENDPOINT = '/api/battery-movements'
 const MOCK_API_ENDPOINT = '/api/mock/esp32-voltage'
 const BLE_SERVICE_UUID = '7f9e0001-6a9d-4f7e-8d4d-32e7be6f1001'
@@ -71,6 +72,12 @@ const log = ref('Start camera, scan with scanner gun, or use manual scan to begi
 const countOffset = ref(0)
 const bleDeviceName = ref(BLE_DEVICE_NAME)
 const bleConnected = ref(false)
+const meterReferenceVoltage = ref('')
+const calibrationOffset = ref(0)
+const calibrationUpdatedAt = ref('')
+const calibrationSensorVoltage = ref<number | null>(null)
+const calibrationMeterVoltage = ref<number | null>(null)
+const lastRawVoltage = ref<number | null>(null)
 
 let mediaStream: MediaStream | null = null
 let detectorTimer: ReturnType<typeof setInterval> | null = null
@@ -326,6 +333,21 @@ const lastVoltageSourceLabel = computed(() => {
   return lastVoltageSource.value ? map[lastVoltageSource.value] : 'Waiting'
 })
 
+const rawVoltageLabel = computed(() => lastRawVoltage.value !== null ? `${lastRawVoltage.value.toFixed(2)}V` : '-')
+const calibratedVoltagePreviewLabel = computed(() => lastRawVoltage.value !== null ? `${applyVoltageCalibration(lastRawVoltage.value).toFixed(2)}V` : '-')
+const calibrationOffsetLabel = computed(() => `${calibrationOffset.value >= 0 ? '+' : ''}${calibrationOffset.value.toFixed(2)}V`)
+const calibrationReferenceLabel = computed(() => {
+  if (calibrationMeterVoltage.value === null || calibrationSensorVoltage.value === null) {
+    return 'No meter reference saved yet'
+  }
+
+  const updatedAt = calibrationUpdatedAt.value
+    ? new Date(calibrationUpdatedAt.value).toLocaleString('th-TH', { dateStyle: 'short', timeStyle: 'short' })
+    : 'n/a'
+
+  return `Meter ${calibrationMeterVoltage.value.toFixed(2)}V vs BLE ${calibrationSensorVoltage.value.toFixed(2)}V on ${updatedAt}`
+})
+
 const esp32Status = computed(() => {
   if (bleConnected.value && workflowStep.value !== 'voltage' && draft.voltage === null) {
     return {
@@ -390,6 +412,18 @@ const bleIdentityDetail = computed(() => {
   return details.length ? details.join(' • ') : 'Waiting for BLE payload'
 })
 const endpointModeLabel = computed(() => endpointMode.value === 'mock' ? 'Mock API' : 'BLE VoltMeter')
+
+function roundVoltage(value: number) {
+  return Number(value.toFixed(2))
+}
+
+function shouldApplyCalibration(source: VoltageSource) {
+  return source === 'esp32' || source === 'mock'
+}
+
+function applyVoltageCalibration(rawVoltage: number) {
+  return roundVoltage(rawVoltage + calibrationOffset.value)
+}
 
 function ensureAudioContext() {
   if (typeof window === 'undefined' || !('AudioContext' in window)) {
@@ -580,6 +614,38 @@ function loadEndpointMode() {
   endpointMode.value = savedMode === 'ble' ? 'ble' : 'mock'
 }
 
+function loadCalibrationProfile() {
+  if (typeof localStorage === 'undefined') {
+    return
+  }
+
+  const raw = localStorage.getItem(CALIBRATION_STORAGE_KEY)
+
+  if (!raw) {
+    return
+  }
+
+  try {
+    const saved = JSON.parse(raw) as {
+      offset?: number
+      updatedAt?: string
+      sensorVoltage?: number | null
+      meterVoltage?: number | null
+    }
+
+    calibrationOffset.value = Number.isFinite(saved.offset) ? Number(saved.offset) : 0
+    calibrationUpdatedAt.value = String(saved.updatedAt ?? '')
+    calibrationSensorVoltage.value = typeof saved.sensorVoltage === 'number' ? saved.sensorVoltage : null
+    calibrationMeterVoltage.value = typeof saved.meterVoltage === 'number' ? saved.meterVoltage : null
+  }
+  catch {
+    calibrationOffset.value = 0
+    calibrationUpdatedAt.value = ''
+    calibrationSensorVoltage.value = null
+    calibrationMeterVoltage.value = null
+  }
+}
+
 function saveCountOffset() {
   if (typeof localStorage === 'undefined') {
     return
@@ -596,10 +662,39 @@ function saveEndpointMode() {
   localStorage.setItem(ENDPOINT_MODE_KEY, endpointMode.value)
 }
 
+function saveCalibrationProfile() {
+  if (typeof localStorage === 'undefined') {
+    return
+  }
+
+  localStorage.setItem(CALIBRATION_STORAGE_KEY, JSON.stringify({
+    offset: calibrationOffset.value,
+    updatedAt: calibrationUpdatedAt.value,
+    sensorVoltage: calibrationSensorVoltage.value,
+    meterVoltage: calibrationMeterVoltage.value,
+  }))
+}
+
 function resetCount() {
   countOffset.value = records.value.length
   saveCountOffset()
   log.value = 'Count reset for this device session'
+}
+
+function resetCalibration() {
+  calibrationOffset.value = 0
+  calibrationUpdatedAt.value = ''
+  calibrationSensorVoltage.value = null
+  calibrationMeterVoltage.value = null
+  meterReferenceVoltage.value = ''
+  saveCalibrationProfile()
+
+  if (lastRawVoltage.value !== null && lastVoltageSource.value && shouldApplyCalibration(lastVoltageSource.value)) {
+    draft.voltage = applyVoltageCalibration(lastRawVoltage.value)
+    manualVoltage.value = draft.voltage.toFixed(2)
+  }
+
+  log.value = 'BLE calibration reset'
 }
 
 function resetDraft() {
@@ -639,6 +734,36 @@ function resetEsp32ReadingState() {
   esp32StableHits = 0
   blePayloadDeviceId = null
   blePayloadFirmwareVersion = null
+}
+
+function autoCalibrateVoltage() {
+  const meterValue = Number.parseFloat(meterReferenceVoltage.value)
+
+  if (Number.isNaN(meterValue)) {
+    log.value = 'Meter reference voltage is invalid'
+    return
+  }
+
+  if (lastRawVoltage.value === null) {
+    log.value = 'No BLE voltage captured yet for calibration'
+    return
+  }
+
+  const normalizedMeterValue = roundVoltage(meterValue)
+  const normalizedRawValue = roundVoltage(lastRawVoltage.value)
+  calibrationOffset.value = roundVoltage(normalizedMeterValue - normalizedRawValue)
+  calibrationUpdatedAt.value = new Date().toISOString()
+  calibrationSensorVoltage.value = normalizedRawValue
+  calibrationMeterVoltage.value = normalizedMeterValue
+  meterReferenceVoltage.value = normalizedMeterValue.toFixed(2)
+  saveCalibrationProfile()
+
+  if (draft.voltage !== null && lastVoltageSource.value && shouldApplyCalibration(lastVoltageSource.value)) {
+    draft.voltage = applyVoltageCalibration(normalizedRawValue)
+    manualVoltage.value = draft.voltage.toFixed(2)
+  }
+
+  log.value = `Auto calibrated BLE offset ${calibrationOffset.value >= 0 ? '+' : ''}${calibrationOffset.value.toFixed(2)}V`
 }
 
 function extractFirmwareVersion(payload: Record<string, any>) {
@@ -1279,11 +1404,16 @@ function handleScannerKeydown(event: KeyboardEvent) {
 }
 
 function setVoltage(value: number, source: VoltageSource = 'manual') {
-  draft.voltage = value
+  const rawValue = roundVoltage(value)
+  const calibratedValue = shouldApplyCalibration(source) ? applyVoltageCalibration(rawValue) : rawValue
+  lastRawVoltage.value = rawValue
+  draft.voltage = calibratedValue
   draft.voltageMeasuredAt = new Date().toISOString()
-  manualVoltage.value = value.toFixed(2)
+  manualVoltage.value = calibratedValue.toFixed(2)
   lastVoltageSource.value = source
-  log.value = `Voltage captured: ${value.toFixed(2)}V`
+  log.value = calibratedValue === rawValue
+    ? `Voltage captured: ${calibratedValue.toFixed(2)}V`
+    : `Voltage captured: ${calibratedValue.toFixed(2)}V (raw ${rawValue.toFixed(2)}V)`
   playStepFeedback('voltage')
 
   if (draft.batterySn && (!draft.toRack || !draft.toSlot)) {
@@ -1446,6 +1576,7 @@ onMounted(() => {
   void loadRecords()
   loadCountOffset()
   loadEndpointMode()
+  loadCalibrationProfile()
   draft.stage = stage.value
   focusScannerCapture()
   window.addEventListener('keydown', handleScannerKeydown)
@@ -1537,7 +1668,7 @@ onBeforeUnmount(() => {
               {{ stageMeta.index }}
             </UBadge>
             <h1 class="mt-1.5 text-[1.35rem] leading-none font-black tracking-tight whitespace-nowrap sm:text-[1.5rem]">
-              Batt Movement BLE
+              Batt Monitor BLE V2
             </h1>
           </div>
 
@@ -1672,6 +1803,23 @@ onBeforeUnmount(() => {
             Last voltage source:
             <span class="font-semibold text-slate-950">{{ lastVoltageSourceLabel }}</span>
           </div>
+          <div class="mt-2 grid grid-cols-3 gap-2 text-[11px]">
+            <div class="rounded-md bg-slate-100 px-2 py-2">
+              <div class="font-semibold uppercase tracking-[0.14em] text-slate-500">Raw BLE</div>
+              <div class="mt-1 text-sm font-bold text-slate-950">{{ rawVoltageLabel }}</div>
+            </div>
+            <div class="rounded-md bg-slate-100 px-2 py-2">
+              <div class="font-semibold uppercase tracking-[0.14em] text-slate-500">Offset</div>
+              <div class="mt-1 text-sm font-bold text-slate-950">{{ calibrationOffsetLabel }}</div>
+            </div>
+            <div class="rounded-md bg-slate-100 px-2 py-2">
+              <div class="font-semibold uppercase tracking-[0.14em] text-slate-500">Calibrated</div>
+              <div class="mt-1 text-sm font-bold text-slate-950">{{ calibratedVoltagePreviewLabel }}</div>
+            </div>
+          </div>
+          <div class="mt-2 text-[11px] text-slate-600">
+            {{ calibrationReferenceLabel }}
+          </div>
           <div class="mt-2 grid grid-cols-2 gap-2">
             <UButton
               size="sm"
@@ -1718,6 +1866,46 @@ onBeforeUnmount(() => {
             </div>
           <div v-if="endpointMode === 'ble' && blePayloadDeviceId" class="mt-1 text-[11px] text-slate-600">
             <span class="font-semibold text-slate-950">{{ bleIdentityDetail }}</span>
+          </div>
+          <div class="mt-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-3">
+            <div class="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+              Auto Calibrate
+            </div>
+            <div class="mt-1 text-[11px] text-slate-600">
+              ใส่ค่าที่วัดจริงจากมิเตอร์ แล้วใช้ค่า BLE ล่าสุดเป็นตัวอ้างอิงเพื่อคำนวณ offset อัตโนมัติ
+            </div>
+            <div class="mt-2 grid grid-cols-[1fr_auto] gap-2">
+              <UInput
+                v-model="meterReferenceVoltage"
+                type="number"
+                step="0.01"
+                placeholder="Meter reference e.g. 12.61"
+                :ui="{ base: '!min-h-10 !bg-white !px-3 !py-2 !text-sm !text-slate-950 !placeholder:text-slate-400' }"
+              />
+              <UButton
+                color="neutral"
+                variant="soft"
+                :class="stageMeta.action"
+                @click="autoCalibrateVoltage"
+              >
+                Auto Calibrate
+              </UButton>
+            </div>
+            <div class="mt-2 grid grid-cols-2 gap-2">
+              <UButton
+                size="sm"
+                color="neutral"
+                variant="soft"
+                class="border border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+                @click="resetCalibration"
+              >
+                Reset Cal
+              </UButton>
+              <div class="rounded-md bg-white px-2 py-2 text-[11px] text-slate-600 shadow-[0_2px_8px_rgba(15,23,42,0.04)]">
+                Current draft voltage:
+                <span class="font-semibold text-slate-950">{{ draft.voltage !== null ? `${draft.voltage.toFixed(2)}V` : '-' }}</span>
+              </div>
+            </div>
           </div>
         </UCard>
 

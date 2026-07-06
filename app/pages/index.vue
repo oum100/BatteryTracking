@@ -6,7 +6,7 @@ const workspaceLinks = [
     className: 'justify-between rounded-2xl bg-lime-600 px-5 py-5 text-left text-lg font-bold text-white hover:bg-lime-700',
   },
   {
-    label: 'Batt Movement BLE',
+    label: 'Batt Monitor BLE V2',
     path: '/batt-movement-ble',
     className: 'justify-between rounded-2xl bg-sky-700 px-5 py-5 text-left text-lg font-bold text-white hover:bg-sky-800',
   },
