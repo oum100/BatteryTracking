@@ -13,6 +13,19 @@ enum MovementStage {
   DELIVERY_TRANSFER
 }
 
+enum BatteryJobPhase {
+  BEFORE_CHARGE
+  AFTER_CHARGE
+  DELIVERY
+}
+
+enum BatteryJobStatus {
+  OPEN
+  BEFORE_CHARGE_COMPLETED
+  AFTER_CHARGE_COMPLETED
+  READY_FOR_DELIVERY
+}
+
 model Battery {
   id            String        @id @default(cuid())
   code          String        @unique
@@ -49,4 +62,73 @@ model BatteryMovement {
 
   @@index([stage, createdAt])
   @@index([batterySn, createdAt])
+}
+
+model Employee {
+  id        String       @id @default(cuid())
+  code      String       @unique
+  name      String
+  active    Boolean      @default(true)
+  jobs      BatteryJob[]
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  @@index([active, name])
+}
+
+model SalesOrder {
+  id          String       @id @default(cuid())
+  soNumber    String       @unique
+  description String?
+  active      Boolean      @default(true)
+  jobs        BatteryJob[]
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  @@index([active, soNumber])
+}
+
+model BatteryJob {
+  id                       String            @id @default(cuid())
+  phase                    BatteryJobPhase   @default(BEFORE_CHARGE)
+  status                   BatteryJobStatus  @default(OPEN)
+  palletId                 String
+  workStartedAt            DateTime
+  operatorId               String?
+  operator                 Employee?         @relation(fields: [operatorId], references: [id], onDelete: SetNull)
+  salesOrderId             String?
+  salesOrder               SalesOrder?       @relation(fields: [salesOrderId], references: [id], onDelete: SetNull)
+  beforeChargeCompletedAt  DateTime?
+  afterChargeCompletedAt   DateTime?
+  deliveryCompletedAt      DateTime?
+  lockedAt                 DateTime?
+  notes                    String?
+  slots                    BatteryJobSlot[]
+  createdAt                DateTime          @default(now())
+  updatedAt                DateTime          @updatedAt
+
+  @@index([palletId, createdAt])
+  @@index([status, phase, createdAt])
+}
+
+model BatteryJobSlot {
+  id                 String      @id @default(cuid())
+  jobId              String
+  job                BatteryJob  @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  slotNumber         Int
+  batteryId          String?
+  beforeVoltage      Float?
+  beforeVoltageMv    Int?
+  beforeMeasuredAt   DateTime?
+  afterVoltage       Float?
+  afterVoltageMv     Int?
+  afterMeasuredAt    DateTime?
+  deliveryVoltage    Float?
+  deliveryVoltageMv  Int?
+  deliveryMeasuredAt DateTime?
+  createdAt          DateTime    @default(now())
+  updatedAt          DateTime    @updatedAt
+
+  @@unique([jobId, slotNumber])
+  @@index([jobId, slotNumber])
 }

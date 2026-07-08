@@ -6,6 +6,11 @@ const workspaceLinks = [
     className: 'justify-between rounded-2xl bg-lime-600 px-5 py-5 text-left text-lg font-bold text-white hover:bg-lime-700',
   },
   {
+    label: 'New Batt Job',
+    path: '/new-batt-job',
+    className: 'justify-between rounded-2xl bg-amber-600 px-5 py-5 text-left text-lg font-bold text-white hover:bg-amber-700',
+  },
+  {
     label: 'Batt Monitor BLE V2',
     path: '/batt-movement-ble',
     className: 'justify-between rounded-2xl bg-sky-700 px-5 py-5 text-left text-lg font-bold text-white hover:bg-sky-800',
@@ -59,7 +64,7 @@ function getWorkspaceHref(path: string) {
                 Choose a workspace
               </h1>
               <p class="max-w-2xl text-base leading-7 text-slate-600 sm:text-lg">
-                เปิดหน้างานที่ต้องใช้ได้ทันทีจาก 3 ส่วนหลักของระบบ
+                เปิดหน้างานที่ต้องใช้ได้ทันทีจากส่วนหลักของระบบ
               </p>
             </div>
           </div>

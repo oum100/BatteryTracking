@@ -488,7 +488,13 @@ async function saveRecord() {
   }
 }
 
-async function deleteRecord(id: string) {
+async function deleteRecord(id: string, batterySn?: string) {
+  const targetLabel = batterySn?.trim() ? ` record for ${batterySn}` : ' this record'
+
+  if (typeof window !== 'undefined' && !window.confirm(`Delete${targetLabel}?`)) {
+    return
+  }
+
   isDeleting.value = true
 
   try {
@@ -1004,7 +1010,7 @@ async function exportPdf() {
                     <UButton size="sm" color="neutral" variant="soft" class="border border-slate-300 bg-white text-slate-700 hover:bg-slate-50" @click="openEdit(record)">
                       Edit
                     </UButton>
-                    <UButton size="sm" color="error" variant="soft" :loading="isDeleting" @click="deleteRecord(record.id)">
+                    <UButton size="sm" color="error" variant="soft" :loading="isDeleting" @click="deleteRecord(record.id, record.batterySn)">
                       Delete
                     </UButton>
                   </div>

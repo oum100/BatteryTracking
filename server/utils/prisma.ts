@@ -1,7 +1,9 @@
 import { PrismaClient } from '@prisma/client'
 
+type PrismaClientInstance = ReturnType<typeof createPrismaClient>
+
 const globalForPrisma = globalThis as typeof globalThis & {
-  prisma?: PrismaClient
+  prisma?: PrismaClientInstance
 }
 
 const TRANSIENT_CONNECTION_PATTERNS = [
