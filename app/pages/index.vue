@@ -6,9 +6,19 @@ const workspaceLinks = [
     className: 'justify-between rounded-2xl bg-lime-600 px-5 py-5 text-left text-lg font-bold text-white hover:bg-lime-700',
   },
   {
+    label: 'Battery QC System',
+    path: '/battery-qc-system',
+    className: 'justify-between rounded-2xl bg-rose-700 px-5 py-5 text-left text-lg font-bold text-white hover:bg-rose-800',
+  },
+  {
     label: 'New Batt Job',
     path: '/new-batt-job',
     className: 'justify-between rounded-2xl bg-amber-600 px-5 py-5 text-left text-lg font-bold text-white hover:bg-amber-700',
+  },
+  {
+    label: 'Battery Report System',
+    path: '/new-batt-job',
+    className: 'justify-between rounded-2xl bg-amber-500 px-5 py-5 text-left text-lg font-bold text-white hover:bg-amber-600',
   },
   {
     label: 'Batt Monitor BLE V2',

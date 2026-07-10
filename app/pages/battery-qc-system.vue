@@ -57,16 +57,22 @@ interface ScanDecisionResponse {
   job: BatteryJobRecord | null
 }
 
-const phase = ref<JobPhase>('BEFORE_CHARGE')
+const phase = ref<JobPhase | null>(null)
 const currentJob = ref<BatteryJobRecord | null>(null)
 const employees = ref<EmployeeItem[]>([])
 const salesOrders = ref<SalesOrderItem[]>([])
 const selectedSlotNumber = ref(1)
+const editingSlotNumber = ref<number | null>(null)
 const workStartedAt = ref(toDateTimeLocalValue(new Date()))
 const operatorId = ref('')
+const employeeScanInput = ref('')
 const salesOrderId = ref('')
 const palletId = ref('')
+const invoiceNumber = ref('')
+const chargeChannel = ref('Channel A')
+const chargeProgram = ref('Program 1')
 const batteryScanInput = ref('')
+const voltageScanInput = ref('')
 const voltageInput = ref('')
 const voltageUnit = ref<VoltageUnit>('V')
 const newEmployeeCode = ref('')
@@ -85,8 +91,9 @@ const loadError = ref('')
 const actionMessage = ref('เปิดใบงานหรือเปิด pallet เพื่อเริ่มงานวัดแรงดัน battery')
 const measurementPopupOpen = ref(false)
 const measurementPopupValue = ref('')
-const measurementPopupUnit = ref<'V' | 'MV'>('V')
-const workflowActionMode = ref<'battery' | 'voltage'>('battery')
+const measurementPopupUnit = ref('')
+const measurementPopupLabel = ref('Voltage Read')
+const workflowActionMode = ref<'battery' | 'voltage' | null>(null)
 
 const BLE_SERVICE_UUID = '7f9e0001-6a9d-4f7e-8d4d-32e7be6f1001'
 const BLE_DEVICE_NAME_PREFIX = 'PUMA-Voltmeter-'
@@ -95,6 +102,8 @@ const palletInputRef = useTemplateRef<HTMLInputElement>('palletInput')
 const batteryInputRef = useTemplateRef<HTMLInputElement>('batteryInput')
 const voltageInputRef = useTemplateRef<HTMLInputElement>('voltageInput')
 const keyboardBatteryScanRef = useTemplateRef<HTMLInputElement>('keyboardBatteryScan')
+const employeeInputRef = useTemplateRef<HTMLInputElement>('employeeInput')
+const keyboardVoltageScanRef = useTemplateRef<HTMLInputElement>('keyboardVoltageScan')
 
 let bleDevice: any = null
 let measurementPopupTimer: ReturnType<typeof setTimeout> | null = null
@@ -102,31 +111,36 @@ let measurementPopupTimer: ReturnType<typeof setTimeout> | null = null
 const phaseOptions = [
   {
     value: 'BEFORE_CHARGE' as const,
-    label: 'วัดก่อนชาร์จ',
-    title: 'Before Charge',
-    detail: 'เปิดใบงานใหม่, scan pallet, scan battery 1-21 และวัดแรงดันก่อนชาร์จ',
+    label: 'QC Before Charge',
+    title: 'QC Before Charge',
+    detail: 'บันทึก Battery ID และค่าแรงดันก่อนชาร์จ',
+    icon: 'i-lucide-battery-low',
     tone: 'bg-lime-700 text-white hover:bg-lime-800 active:bg-lime-900',
     softTone: 'border border-lime-300 bg-lime-100 text-lime-950',
   },
   {
     value: 'AFTER_CHARGE' as const,
-    label: 'วัดหลังชาร์จ',
-    title: 'After Charge',
-    detail: 'เปิด pallet เดิมและบันทึกแรงดันหลังชาร์จตามตำแหน่งเดิม',
+    label: 'QC After Charge',
+    title: 'QC After Charge',
+    detail: 'อ่านค่าแรงดันหลังชาร์จตามตำแหน่งเดิม',
+    icon: 'i-lucide-battery-full',
     tone: 'bg-sky-700 text-white hover:bg-sky-800 active:bg-sky-900',
     softTone: 'border border-sky-300 bg-sky-100 text-sky-950',
   },
   {
     value: 'DELIVERY' as const,
-    label: 'วัด Delivery',
-    title: 'Delivery',
-    detail: 'ตรวจวัดก่อนส่งมอบและ lock ค่าเมื่อยืนยันพร้อมส่ง',
+    label: 'QC for Delivery',
+    title: 'QC for Delivery',
+    detail: 'ตรวจวัดก่อนส่งมอบและยืนยันค่าก่อนจัดส่ง',
+    icon: 'i-lucide-truck',
     tone: 'bg-amber-700 text-white hover:bg-amber-800 active:bg-amber-900',
     softTone: 'border border-amber-300 bg-amber-100 text-amber-950',
   },
 ] as const
 
-const currentPhaseMeta = computed(() => phaseOptions.find(option => option.value === phase.value) ?? phaseOptions[0])
+const currentPhaseMeta = computed(() => phaseOptions.find(option => option.value === phase.value) ?? null)
+const hasPhaseSelected = computed(() => phase.value !== null)
+const selectedEmployee = computed(() => employees.value.find(employee => employee.id === operatorId.value) ?? null)
 const slotRows = computed(() => {
   const slots = currentJob.value?.slots ?? Array.from({ length: 21 }, (_, index) => ({
     id: `preview-${index + 1}`,
@@ -151,8 +165,13 @@ const slotRows = computed(() => {
 })
 
 const selectedSlot = computed(() => currentJob.value?.slots.find(slot => slot.slotNumber === selectedSlotNumber.value) ?? null)
-const selectedPhaseMeasuredAt = computed(() => selectedSlot.value ? getPhaseMeasuredAt(selectedSlot.value, phase.value) : null)
-const selectedPhaseVoltageLabel = computed(() => selectedSlot.value ? getSlotVoltageLabel(selectedSlot.value, phase.value) : '-')
+const modalSelectedSlot = computed(() => {
+  if (!editingSlotNumber.value) {
+    return null
+  }
+
+  return currentJob.value?.slots.find(slot => slot.slotNumber === editingSlotNumber.value) ?? null
+})
 const hasJob = computed(() => currentJob.value !== null)
 const firstIncompleteSlotNumber = computed(() => {
   if (!currentJob.value) {
@@ -187,7 +206,7 @@ const jobStatusLabel = computed(() => {
 
   return 'Open'
 })
-const openButtonLabel = computed(() => phase.value === 'BEFORE_CHARGE' ? 'เปิดใบงาน' : 'เปิด pallet')
+const openButtonLabel = computed(() => 'Rack View')
 const activeSlotCardClass = computed(() => {
   if (phase.value === 'BEFORE_CHARGE') {
     return 'border-lime-400 bg-lime-50 text-lime-950'
@@ -260,12 +279,36 @@ function getDefaultWorkflowActionMode(targetPhase: JobPhase) {
   return targetPhase === 'BEFORE_CHARGE' ? 'battery' : 'voltage'
 }
 
+async function armDefaultWorkflow(autoFocus = true) {
+  if (!currentJob.value || !phase.value) {
+    workflowActionMode.value = null
+    return
+  }
+
+  workflowActionMode.value = getDefaultWorkflowActionMode(phase.value)
+  activateNextModeSlot()
+
+  if (autoFocus) {
+    await focusWorkflowInput()
+  }
+}
+
 function resetCurrentJobState() {
   currentJob.value = null
   selectedSlotNumber.value = 1
+  editingSlotNumber.value = null
   batteryScanInput.value = ''
   voltageInput.value = ''
+  workflowActionMode.value = null
   detailModalOpen.value = false
+}
+
+function syncWorkflowSlotInputs() {
+  batteryScanInput.value = selectedSlot.value?.batteryId ?? ''
+}
+
+function syncModalSlotInputs() {
+  batteryScanInput.value = modalSelectedSlot.value?.batteryId ?? ''
 }
 
 function clearMeasurementPopupTimer() {
@@ -277,8 +320,20 @@ function clearMeasurementPopupTimer() {
 
 function showMeasurementPopup(voltage: number) {
   clearMeasurementPopupTimer()
+  measurementPopupLabel.value = 'Voltage'
   measurementPopupValue.value = voltage.toFixed(3)
   measurementPopupUnit.value = 'V'
+  measurementPopupOpen.value = true
+  measurementPopupTimer = setTimeout(() => {
+    measurementPopupOpen.value = false
+  }, 2000)
+}
+
+function showBatteryIdPopup(batteryId: string) {
+  clearMeasurementPopupTimer()
+  measurementPopupLabel.value = 'Battery ID'
+  measurementPopupValue.value = batteryId
+  measurementPopupUnit.value = ''
   measurementPopupOpen.value = true
   measurementPopupTimer = setTimeout(() => {
     measurementPopupOpen.value = false
@@ -289,6 +344,26 @@ function wait(ms: number) {
   return new Promise(resolve => setTimeout(resolve, ms))
 }
 
+async function focusEmployeeInput() {
+  await nextTick()
+  employeeInputRef.value?.focus()
+  employeeInputRef.value?.select()
+}
+
+async function focusPalletInput() {
+  await nextTick()
+  palletInputRef.value?.focus()
+  palletInputRef.value?.select()
+}
+
+function backToPhaseLanding() {
+  phase.value = null
+  workflowActionMode.value = null
+  detailModalOpen.value = false
+  editingSlotNumber.value = null
+  actionMessage.value = 'เลือกโหมด QC เพื่อเริ่มงาน'
+}
+
 async function focusActiveModalField() {
   await nextTick()
 
@@ -296,7 +371,9 @@ async function focusActiveModalField() {
     return
   }
 
-  if (workflowActionMode.value === 'battery') {
+  const activeMode = workflowActionMode.value ?? (phase.value ? getDefaultWorkflowActionMode(phase.value) : 'battery')
+
+  if (activeMode === 'battery') {
     batteryInputRef.value?.focus()
     batteryInputRef.value?.select()
     return
@@ -304,6 +381,64 @@ async function focusActiveModalField() {
 
   voltageInputRef.value?.focus()
   voltageInputRef.value?.select()
+}
+
+async function focusWorkflowInput() {
+  await nextTick()
+
+  if (detailModalOpen.value) {
+    return
+  }
+
+  if (!workflowActionMode.value) {
+    return
+  }
+
+  if (workflowActionMode.value === 'battery') {
+    keyboardBatteryScanRef.value?.focus()
+    keyboardBatteryScanRef.value?.select()
+    return
+  }
+
+  keyboardVoltageScanRef.value?.focus()
+  keyboardVoltageScanRef.value?.select()
+}
+
+async function restoreWorkflowFocus() {
+  if (typeof document !== 'undefined') {
+    const activeElement = document.activeElement as HTMLElement | null
+    activeElement?.blur?.()
+  }
+
+  await wait(20)
+  await focusWorkflowInput()
+  await wait(80)
+  await focusWorkflowInput()
+}
+
+function activateNextModeSlot() {
+  if (!currentJob.value) {
+    selectedSlotNumber.value = 1
+    editingSlotNumber.value = null
+    return
+  }
+
+  if (workflowActionMode.value === 'battery') {
+    const nextBatterySlot = currentJob.value.slots.find(slot => !slot.batteryId.trim())
+    if (nextBatterySlot) {
+      selectedSlotNumber.value = nextBatterySlot.slotNumber
+      editingSlotNumber.value = null
+      syncWorkflowSlotInputs()
+      return
+    }
+  }
+
+  const nextVoltageSlot = currentJob.value.slots.find(slot => getPhaseVoltage(slot, phase.value) === null)
+  if (nextVoltageSlot) {
+    selectedSlotNumber.value = nextVoltageSlot.slotNumber
+    editingSlotNumber.value = null
+    syncWorkflowSlotInputs()
+  }
 }
 
 function applyScannedValue(value: string) {
@@ -344,6 +479,7 @@ async function handleScannedPalletWorkflow(scannedPalletId: string) {
 
     if (response.action === 'LOAD_EXISTING' && response.job) {
       applyJob(response.job)
+      await armDefaultWorkflow()
       workStartedAt.value = toDateTimeLocalValue(new Date())
       actionMessage.value = response.recommendedPhase === 'AFTER_CHARGE'
         ? `พบ pallet ${response.palletId} แล้ว ระบบเปิด phase 2 ให้อัตโนมัติ`
@@ -368,6 +504,7 @@ async function handleScannedPalletWorkflow(scannedPalletId: string) {
       : response.reason === 'ALL_PHASES_COMPLETED'
         ? `pallet ${response.palletId} ทำครบ 3 phase แล้ว ระบบเตรียม phase 1 ใหม่ไว้ให้`
         : `ไม่พบ pallet ${response.palletId} ในระบบ ระบบเตรียม phase 1 ใหม่ไว้ให้`
+    await focusEmployeeInput()
   }
   catch (error) {
     loadError.value = error instanceof Error ? error.message : 'Unable to scan pallet'
@@ -389,7 +526,36 @@ async function handlePalletInput(value: string) {
 
   if (isAutoScanPalletCode(palletId.value)) {
     await handleScannedPalletWorkflow(palletId.value)
+    return
   }
+
+  await focusEmployeeInput()
+}
+
+function resolveEmployeeId(scannedValue: string) {
+  const normalized = scannedValue.trim().toUpperCase()
+  const matched = employees.value.find(employee => employee.code.trim().toUpperCase() === normalized)
+  if (!matched) {
+    actionMessage.value = `ไม่พบ Employee ID ${normalized} ในฐานข้อมูล`
+    return
+  }
+
+  operatorId.value = matched.id
+  employeeScanInput.value = matched.code
+  actionMessage.value = `เลือกเจ้าหน้าที่ ${matched.code} - ${matched.name} แล้ว`
+}
+
+function selectEmployeeById(employeeId: string) {
+  operatorId.value = employeeId
+
+  const matched = employees.value.find(employee => employee.id === employeeId)
+  if (!matched) {
+    employeeScanInput.value = ''
+    return
+  }
+
+  employeeScanInput.value = matched.code
+  actionMessage.value = `เลือกเจ้าหน้าที่ ${matched.code} - ${matched.name} แล้ว`
 }
 
 async function handleBatteryInput(value: string) {
@@ -407,6 +573,18 @@ async function handleBatteryInput(value: string) {
   }
 }
 
+async function handleVoltageReaderInput(value: string) {
+  const normalized = value.trim()
+  if (!normalized) {
+    return
+  }
+
+  voltageScanInput.value = ''
+  workflowActionMode.value = 'voltage'
+  voltageInput.value = normalized
+  await saveActiveSlotVoltage(normalized)
+}
+
 async function startBatteryIdScanWorkflow() {
   if (!isBatteryIdWorkflowEnabled.value) {
     actionMessage.value = 'phase นี้ไม่อนุญาตให้แก้ Battery ID'
@@ -419,13 +597,22 @@ async function startBatteryIdScanWorkflow() {
   }
 
   workflowActionMode.value = 'battery'
-  activateNextWorkflowSlot()
+  activateNextModeSlot()
   scanTarget.value = 'battery'
   actionMessage.value = `พร้อมรับค่า Battery ID สำหรับ slot ${selectedSlotNumber.value}`
+  await focusWorkflowInput()
+}
 
-  await nextTick()
-  keyboardBatteryScanRef.value?.focus()
-  keyboardBatteryScanRef.value?.select()
+async function startVoltageWorkflow() {
+  if (!currentJob.value) {
+    actionMessage.value = 'เปิดงานก่อน แล้วค่อยเริ่มอ่านค่า Voltage'
+    return
+  }
+
+  workflowActionMode.value = 'voltage'
+  activateNextModeSlot()
+  actionMessage.value = `พร้อมรับค่า Voltage สำหรับ slot ${selectedSlotNumber.value}`
+  await focusWorkflowInput()
 }
 
 function handleBleDisconnect() {
@@ -593,15 +780,22 @@ function applyJob(job: any) {
   palletId.value = currentJob.value.palletId
   workStartedAt.value = toDateTimeLocalValue(new Date(currentJob.value.workStartedAt))
   operatorId.value = currentJob.value.operatorId ?? ''
+  employeeScanInput.value = selectedEmployee.value?.code ?? ''
   salesOrderId.value = currentJob.value.salesOrderId ?? ''
-  workflowActionMode.value = getDefaultWorkflowActionMode(phase.value)
   selectedSlotNumber.value = currentJob.value.slots.find(slot => !getPhaseVoltage(slot, phase.value))?.slotNumber ?? 1
   syncSelectedSlot()
+  if (detailModalOpen.value && editingSlotNumber.value) {
+    syncModalSlotInputs()
+    return
+  }
+
+  syncWorkflowSlotInputs()
 }
 
 function syncSelectedSlot() {
   if (!currentJob.value) {
     selectedSlotNumber.value = 1
+    editingSlotNumber.value = null
     return
   }
 
@@ -617,13 +811,15 @@ function syncSelectedSlot() {
 
 function selectPhase(nextPhase: JobPhase) {
   phase.value = nextPhase
-  workflowActionMode.value = getDefaultWorkflowActionMode(nextPhase)
+  workflowActionMode.value = null
   selectedSlotNumber.value = 1
+  editingSlotNumber.value = null
   batteryScanInput.value = ''
   voltageInput.value = ''
   actionMessage.value = nextPhase === 'BEFORE_CHARGE'
     ? 'เปิดใบงานใหม่สำหรับ pallet ที่กำลังจัดเตรียมก่อนชาร์จ'
     : 'เปิด pallet เดิมเพื่อวัดแรงดันตามตำแหน่งเดิม'
+  void focusPalletInput()
 }
 
 function selectSlot(slotNumber: number) {
@@ -631,9 +827,8 @@ function selectSlot(slotNumber: number) {
     return
   }
 
-  selectedSlotNumber.value = slotNumber
-  const slot = currentJob.value?.slots.find(item => item.slotNumber === slotNumber)
-  batteryScanInput.value = slot?.batteryId ?? ''
+  editingSlotNumber.value = slotNumber
+  syncModalSlotInputs()
   detailModalOpen.value = true
 }
 
@@ -654,6 +849,10 @@ function activateNextWorkflowSlot() {
 
 function closeSlotDetail() {
   detailModalOpen.value = false
+  editingSlotNumber.value = null
+  activateNextModeSlot()
+  syncWorkflowSlotInputs()
+  void restoreWorkflowFocus()
 }
 
 async function advanceToSlot(nextSlotNumber: number | null) {
@@ -692,7 +891,7 @@ async function createEmployee() {
   })
 
   await loadMasters()
-  operatorId.value = response.employee.id
+  selectEmployeeById(response.employee.id)
   newEmployeeCode.value = ''
   newEmployeeName.value = ''
   actionMessage.value = 'เพิ่มพนักงานใหม่เรียบร้อยแล้ว'
@@ -720,6 +919,11 @@ async function createSalesOrder() {
 }
 
 async function openCurrentJob(skipRequiredValidation = false) {
+  if (!phase.value) {
+    actionMessage.value = 'เลือก phase ก่อนเปิดงาน'
+    return
+  }
+
   if (!palletId.value.trim()) {
     actionMessage.value = 'กรอกหรือ scan pallet ID ก่อน'
     return
@@ -751,6 +955,7 @@ async function openCurrentJob(skipRequiredValidation = false) {
     })
 
     applyJob(response.job)
+    await armDefaultWorkflow()
     actionMessage.value = phase.value === 'BEFORE_CHARGE'
       ? `เปิดใบงาน pallet ${palletId.value.toUpperCase()} แล้ว เริ่มที่ slot 1`
       : `เปิด pallet ${palletId.value.toUpperCase()} แล้ว เริ่มวัดตามลำดับเดิม`
@@ -764,6 +969,11 @@ async function openCurrentJob(skipRequiredValidation = false) {
 }
 
 async function loadExistingPallet() {
+  if (!phase.value) {
+    actionMessage.value = 'เลือก phase ก่อนโหลด pallet'
+    return
+  }
+
   if (!palletId.value.trim()) {
     actionMessage.value = 'กรอก pallet ID ก่อนค้นหา'
     return
@@ -781,6 +991,7 @@ async function loadExistingPallet() {
     })
 
     applyJob(response.job)
+    await armDefaultWorkflow()
     actionMessage.value = `โหลด pallet ${palletId.value.toUpperCase()} สำเร็จ`
   }
   catch (error) {
@@ -805,7 +1016,7 @@ async function saveSelectedBatteryId() {
   isSavingBattery.value = true
 
   try {
-    const savedSlotNumber = selectedSlotNumber.value
+    const savedSlotNumber = detailModalOpen.value ? (editingSlotNumber.value ?? selectedSlotNumber.value) : selectedSlotNumber.value
     const response = await $fetch<{ job: BatteryJobRecord }>(`/api/battery-jobs/${currentJob.value.id}/slot-battery`, {
       method: 'PATCH',
       body: {
@@ -817,10 +1028,11 @@ async function saveSelectedBatteryId() {
     applyJob(response.job)
 
     if (!detailModalOpen.value) {
+      showBatteryIdPopup(batteryScanInput.value)
       const nextSlot = currentJob.value?.slots.find(slot => !slot.batteryId.trim())
       if (nextSlot) {
         selectedSlotNumber.value = nextSlot.slotNumber
-        batteryScanInput.value = nextSlot.batteryId ?? ''
+        syncWorkflowSlotInputs()
         actionMessage.value = `บันทึก Battery ID ให้ slot ${savedSlotNumber} แล้ว เลื่อนไป slot ${nextSlot.slotNumber}`
       }
       else {
@@ -850,7 +1062,86 @@ async function fetchMockVoltReading() {
   return Number(payload.voltage)
 }
 
+async function saveActiveSlotVoltage(voltageValue: string) {
+  if (!phase.value) {
+    actionMessage.value = 'เลือก phase ก่อนบันทึกแรงดัน'
+    return
+  }
+
+  if (!currentJob.value) {
+    actionMessage.value = 'เปิดงานก่อนบันทึกแรงดัน'
+    return
+  }
+
+  if (!voltageValue.trim()) {
+    actionMessage.value = 'ไม่มีค่า Voltage ที่อ่านเข้ามา'
+    return
+  }
+
+  if (!detailModalOpen.value) {
+    activateNextWorkflowSlot()
+  }
+
+  const targetSlotNumber = detailModalOpen.value ? (editingSlotNumber.value ?? selectedSlotNumber.value) : selectedSlotNumber.value
+  const activeSlot = currentJob.value.slots.find(slot => slot.slotNumber === targetSlotNumber) ?? null
+  if (!activeSlot) {
+    actionMessage.value = 'ไม่พบ active slot สำหรับบันทึกแรงดัน'
+    return
+  }
+
+  if (phase.value === 'BEFORE_CHARGE' && !(activeSlot.batteryId || batteryScanInput.value.trim())) {
+    actionMessage.value = `slot ${targetSlotNumber} ต้องมี Battery ID ก่อนวัดแรงดัน`
+    return
+  }
+
+  isMeasuring.value = true
+
+  try {
+    const measuredSlotNumber = targetSlotNumber
+    const response = await $fetch<{ job: BatteryJobRecord }>(`/api/battery-jobs/${currentJob.value.id}/slot`, {
+      method: 'PATCH',
+      body: {
+        phase: phase.value,
+        slotNumber: measuredSlotNumber,
+        batteryId: phase.value === 'BEFORE_CHARGE' ? (activeSlot.batteryId || batteryScanInput.value || '') : null,
+        voltage: voltageValue,
+        voltageUnit: 'V',
+        measuredAt: new Date(workStartedAt.value).toISOString(),
+      },
+    })
+
+    applyJob(response.job)
+    showMeasurementPopup(Number(voltageValue))
+
+    if (!detailModalOpen.value) {
+      const nextSlot = currentJob.value?.slots.find(slot => getPhaseVoltage(slot, phase.value) === null)
+      if (nextSlot) {
+        selectedSlotNumber.value = nextSlot.slotNumber
+        syncWorkflowSlotInputs()
+        actionMessage.value = `บันทึก Voltage slot ${measuredSlotNumber} แล้ว เลื่อนไป slot ${nextSlot.slotNumber}`
+      }
+      else {
+        actionMessage.value = `บันทึก Voltage ครบทุก slot แล้ว`
+      }
+      return
+    }
+
+    actionMessage.value = `บันทึกแรงดัน slot ${measuredSlotNumber} สำเร็จ`
+  }
+  catch (error) {
+    actionMessage.value = error instanceof Error ? error.message : 'Unable to save voltage'
+  }
+  finally {
+    isMeasuring.value = false
+  }
+}
+
 async function measureActiveSlotFromVoltMeter() {
+  if (!phase.value) {
+    actionMessage.value = 'เลือก phase ก่อนอ่านแรงดัน'
+    return
+  }
+
   if (!currentJob.value) {
     actionMessage.value = 'เปิดงานก่อนอ่านแรงดัน'
     return
@@ -919,6 +1210,11 @@ function fillMockVoltage() {
 }
 
 async function measureSelectedSlot() {
+  if (!phase.value) {
+    actionMessage.value = 'เลือก phase ก่อนบันทึกแรงดัน'
+    return
+  }
+
   if (!currentJob.value) {
     actionMessage.value = 'เปิดงานก่อนบันทึกแรงดัน'
     return
@@ -929,7 +1225,7 @@ async function measureSelectedSlot() {
     return
   }
 
-  if (phase.value === 'BEFORE_CHARGE' && !(batteryScanInput.value.trim() || selectedSlot.value?.batteryId)) {
+  if (phase.value === 'BEFORE_CHARGE' && !(batteryScanInput.value.trim() || modalSelectedSlot.value?.batteryId)) {
     actionMessage.value = 'slot ก่อนชาร์จต้องมี Battery ID ก่อนวัด'
     return
   }
@@ -937,13 +1233,13 @@ async function measureSelectedSlot() {
   isMeasuring.value = true
 
   try {
-    const measuredSlotNumber = selectedSlotNumber.value
+    const measuredSlotNumber = editingSlotNumber.value ?? selectedSlotNumber.value
     const response = await $fetch<{ job: BatteryJobRecord }>(`/api/battery-jobs/${currentJob.value.id}/slot`, {
       method: 'PATCH',
       body: {
         phase: phase.value,
-        slotNumber: selectedSlotNumber.value,
-        batteryId: phase.value === 'BEFORE_CHARGE' ? (batteryScanInput.value || selectedSlot.value?.batteryId || '') : null,
+        slotNumber: measuredSlotNumber,
+        batteryId: phase.value === 'BEFORE_CHARGE' ? (batteryScanInput.value || modalSelectedSlot.value?.batteryId || '') : null,
         voltage: voltageInput.value,
         voltageUnit: voltageUnit.value,
         measuredAt: new Date(workStartedAt.value).toISOString(),
@@ -966,6 +1262,11 @@ async function measureSelectedSlot() {
 async function confirmCurrentPhase() {
   if (!currentJob.value) {
     actionMessage.value = 'ยังไม่มีงานให้ยืนยัน'
+    return
+  }
+
+  if (!phase.value) {
+    actionMessage.value = 'เลือก phase ก่อนยืนยันงาน'
     return
   }
 
@@ -1015,6 +1316,7 @@ onMounted(async () => {
 
 watch([detailModalOpen, workflowActionMode], async ([isOpen]) => {
   if (!isOpen) {
+    await restoreWorkflowFocus()
     return
   }
 
@@ -1034,137 +1336,222 @@ onBeforeUnmount(() => {
   <main class="min-h-screen bg-[linear-gradient(135deg,_#eef7e6_0%,_#e8f0ff_50%,_#fff4dc_100%)] px-4 py-3 text-slate-950">
     <section class="mx-auto flex max-w-[1600px] flex-col gap-3">
       <UCard
+        v-if="!hasPhaseSelected"
         :ui="{
-          root: 'rounded-[26px] border-0 bg-white/92 shadow-[0_24px_80px_rgba(15,23,42,0.10)] ring-1 ring-slate-950/5',
+          root: 'rounded-[24px] border-0 bg-[#2f2f32] shadow-[0_24px_80px_rgba(15,23,42,0.16)] ring-1 ring-slate-950/10',
           body: 'p-4'
         }"
       >
-        <div class="flex flex-wrap items-start justify-between gap-3">
+        <div class="grid items-center gap-4 lg:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]">
           <div>
-            <div class="text-sm font-bold uppercase tracking-[0.24em] text-slate-500">Tablet Workspace</div>
-            <h1 class="mt-1 text-4xl font-black tracking-tight text-slate-950">
-              Battery Report System
+            <div class="text-sm text-white/80">MF Auto Workspace</div>
+            <h1 class="mt-2 text-4xl font-black tracking-tight text-white">
+              Battery QC System
             </h1>
           </div>
 
-          <div class="grid gap-3 sm:grid-cols-1">
-            <div class="min-w-[220px] rounded-[16px] border border-slate-200 bg-slate-50 px-4 py-3 shadow-sm">
-              <div class="flex items-center justify-start gap-2">
-                <div class="text-sm font-black text-slate-950">Volt Meter</div>
-                <div v-if="bleConnected" class="text-sm font-black text-emerald-800">
-                  {{ bleDeviceName }}
-                </div>
-                <div v-else class="text-sm font-black text-rose-700">
-                  Device not connect
-                </div>
+          <div class="flex justify-center lg:justify-self-center">
+            <img src="/branding/logo-puma-battery.png" alt="PUMA Battery" class="h-24 w-auto object-contain" />
+          </div>
+
+          <div />
+        </div>
+      </UCard>
+
+      <div v-if="!hasPhaseSelected" class="flex min-h-[52vh] items-center justify-center">
+        <div class="grid w-full max-w-[1180px] gap-5 lg:grid-cols-3">
+          <button
+            v-for="option in phaseOptions"
+            :key="option.value"
+            type="button"
+            class="min-h-[220px] border-2 px-8 py-8 text-left shadow-[0_24px_60px_rgba(15,23,42,0.12)] transition-all duration-200 hover:-translate-y-1 hover:shadow-[0_30px_70px_rgba(15,23,42,0.16)] active:translate-y-0"
+            :class="[
+              option.value === 'BEFORE_CHARGE'
+                ? 'border-lime-500 bg-[linear-gradient(180deg,_#f4ffe7_0%,_#e5f7cf_100%)] text-lime-950'
+                : option.value === 'AFTER_CHARGE'
+                  ? 'border-sky-500 bg-[linear-gradient(180deg,_#eef7ff_0%,_#dbeeff_100%)] text-sky-950'
+                  : 'border-amber-500 bg-[linear-gradient(180deg,_#fff5e7_0%,_#ffe6bf_100%)] text-amber-950',
+              'rounded-xl'
+            ]"
+            @click="selectPhase(option.value)"
+          >
+            <div class="flex items-start justify-between gap-6">
+              <div class="text-sm font-black uppercase tracking-[0.22em] opacity-70">Select Mode</div>
+              <div
+                class="flex h-20 w-20 shrink-0 items-center justify-center rounded-xl border border-current/15 bg-white/55 shadow-[0_12px_24px_rgba(15,23,42,0.08)]"
+              >
+                <UIcon :name="option.icon" class="size-11" />
               </div>
-              <div class="mt-3 flex justify-center">
-                <UButton
-                  color="neutral"
-                  :variant="bleConnected ? 'solid' : 'soft'"
-                  :class="`${bleConnected ? phasePrimaryButtonClass : phaseSoftButtonClass} min-w-[140px] justify-center rounded-2xl px-4 py-2 text-sm font-black`"
-                  @click="connectBleVoltMeter"
-                >
-                  {{ bleConnected ? 'Disconnect' : 'Connect' }}
-                </UButton>
+            </div>
+            <div class="mt-6 text-[2.15rem] font-black leading-tight tracking-[-0.03em]">{{ option.label }}</div>
+            <div class="mt-4 text-base font-semibold opacity-90">{{ option.detail }}</div>
+          </button>
+        </div>
+      </div>
+
+      <div
+        v-else
+        class="overflow-hidden rounded-[22px] border shadow-[0_18px_48px_rgba(15,23,42,0.08)]"
+        :class="phase === 'BEFORE_CHARGE'
+          ? 'border-lime-500 bg-[linear-gradient(180deg,_#4d8f00_0%,_#65a30d_100%)] text-white'
+          : phase === 'AFTER_CHARGE'
+            ? 'border-sky-500 bg-[linear-gradient(180deg,_#1874b8_0%,_#0ea5e9_100%)] text-white'
+            : 'border-amber-600 bg-[linear-gradient(180deg,_#d97706_0%,_#f59e0b_100%)] text-white'"
+      >
+        <div class="grid items-center gap-6 px-7 py-5 lg:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]">
+          <div class="flex items-center gap-5">
+            <div
+              class="flex h-16 w-16 items-center justify-center rounded-xl bg-white/18 ring-1 ring-white/20"
+            >
+              <UIcon
+                :name="currentPhaseMeta?.icon ?? 'i-lucide-battery'"
+                class="size-8"
+                :class="phase === 'DELIVERY' ? 'text-white' : 'text-white'"
+              />
+            </div>
+            <div>
+              <div
+                class="text-xs font-black uppercase tracking-[0.24em]"
+                :class="phase === 'DELIVERY' ? 'text-white/75' : 'text-white/75'"
+              >
+                Current QC Mode
+              </div>
+              <div class="mt-1 text-[2rem] font-black leading-none">{{ currentPhaseMeta?.label }}</div>
+              <div
+                class="mt-1 text-sm font-semibold"
+                :class="phase === 'DELIVERY' ? 'text-white/85' : 'text-white/85'"
+              >
+                {{ currentPhaseMeta?.detail }}
               </div>
             </div>
           </div>
-        </div>
-      </UCard>
 
-      <div class="grid gap-3 lg:grid-cols-3">
-        <UButton
-          v-for="option in phaseOptions"
-          :key="option.value"
-          block
-          size="xl"
-          color="neutral"
-          variant="solid"
-          :class="phase === option.value ? option.tone : 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-100 active:bg-slate-200'"
-          :ui="{ base: 'min-h-[86px] justify-start rounded-[22px] px-5 text-left' }"
-          @click="selectPhase(option.value)"
-        >
-          <div>
-            <div class="text-2xl font-black">{{ option.label }}</div>
-            <div class="mt-1 text-sm font-medium opacity-90">{{ option.detail }}</div>
+          <div class="flex justify-center lg:justify-self-center">
+            <img src="/branding/logo-puma-battery.png" alt="PUMA Battery" class="h-20 w-auto object-contain" />
           </div>
-        </UButton>
-      </div>
 
-      <UCard
-        :ui="{
-          root: 'rounded-[22px] border-0 bg-white/92 shadow-[0_18px_48px_rgba(15,23,42,0.08)]',
-          body: 'p-4'
-        }"
-      >
-        <div class="flex items-center justify-between gap-3">
-          <div>
-            <div class="text-xs font-bold uppercase tracking-[0.2em] text-slate-500">ใบงาน</div>
-            <div class="mt-1 text-3xl font-black text-slate-950">{{ currentPhaseMeta.label }}</div>
-          </div>
-          <div class="flex items-center gap-3">
+          <div class="flex items-center justify-end">
             <UButton
               color="neutral"
               variant="solid"
-              :loading="isBusy"
-              :class="`${phasePrimaryButtonClass} rounded-2xl px-5 py-3 text-base font-black`"
-              @click="openCurrentJob"
+              class="rounded-xl px-5 py-3 text-sm font-black"
+              :class="phase === 'DELIVERY'
+                ? 'border border-white/35 bg-white/12 text-white hover:bg-white/20 active:bg-white/25'
+                : 'border border-white/30 bg-white/12 text-white hover:bg-white/20 active:bg-white/25'"
+              @click="backToPhaseLanding"
             >
-              {{ openButtonLabel }}
-            </UButton>
-            <UButton
-              color="neutral"
-              variant="soft"
-              :class="`${phaseSoftButtonClass} rounded-2xl px-5 py-3 text-base font-black`"
-              @click="actionMessage = 'กรุณาเพิ่มพนักงานจากฐานข้อมูลกลางหรือใช้ API สำหรับเพิ่มพนักงาน'"
-            >
-              เพิ่มพนักงาน
+              Change Mode
             </UButton>
           </div>
         </div>
+      </div>
 
-        <div class="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-[1.2fr_1fr_1fr_1fr]">
-            <label class="block">
-              <div class="mb-1 text-sm font-bold text-slate-700">Pallet ID</div>
-              <input
-                ref="palletInput"
-                v-model="palletId"
-                type="text"
-                placeholder="Scan QR / Enter Pallet ID"
-                class="h-12 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm font-semibold uppercase text-slate-950 outline-none"
-                @keyup.enter="handlePalletInput(palletId)"
-              />
-            </label>
-            <label class="block">
-              <div class="mb-1 text-sm font-bold text-slate-700">วันเวลา</div>
-              <input v-model="workStartedAt" type="datetime-local" class="h-12 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-950 outline-none ring-0" />
-            </label>
+      <template v-if="hasPhaseSelected">
+        <UCard
+          :ui="{
+            root: 'rounded-[22px] border-0 bg-white/92 shadow-[0_18px_48px_rgba(15,23,42,0.08)]',
+            body: 'p-4'
+          }"
+        >
+          <div class="flex items-center justify-between gap-3">
+            <div>
+              <div class="text-xs font-bold uppercase tracking-[0.2em] text-slate-500">QC Header</div>
+              <div class="mt-1 text-3xl font-black text-slate-950">{{ currentPhaseMeta?.label ?? 'Select QC Phase' }}</div>
+            </div>
+            <div class="flex items-center gap-3">
+              <UButton
+                color="neutral"
+                variant="solid"
+                :loading="isBusy"
+                :class="`${phasePrimaryButtonClass} rounded-2xl px-5 py-3 text-base font-black`"
+                @click="openCurrentJob"
+              >
+                {{ openButtonLabel }}
+              </UButton>
+              <UButton
+                color="neutral"
+                variant="soft"
+                :class="`${phaseSoftButtonClass} rounded-2xl px-5 py-3 text-base font-black`"
+                @click="actionMessage = 'กรุณาเพิ่มพนักงานจากฐานข้อมูลกลางหรือใช้ API สำหรับเพิ่มพนักงาน'"
+              >
+                เพิ่มพนักงาน
+              </UButton>
+            </div>
+          </div>
 
-            <label class="block">
-              <div class="mb-1 text-sm font-bold text-slate-700">เจ้าหน้าที่</div>
-              <select v-model="operatorId" class="h-12 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-950 outline-none">
-                <option value="">เลือกเจ้าหน้าที่</option>
-                <option v-for="employee in employees" :key="employee.id" :value="employee.id">
-                  {{ employee.code }} - {{ employee.name }}
-                </option>
-              </select>
-            </label>
+          <div class="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-6">
+              <label class="block">
+                <div class="mb-1 text-sm font-bold text-slate-700">Rack No</div>
+                <input
+                  ref="palletInput"
+                  v-model="palletId"
+                  type="text"
+                  placeholder="Scan Rack QR"
+                  class="h-12 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm font-semibold uppercase text-slate-950 outline-none"
+                  @keyup.enter="handlePalletInput(palletId)"
+                />
+              </label>
 
-            <label class="block">
-              <div class="mb-1 text-sm font-bold text-slate-700">SO Number</div>
-              <select v-model="salesOrderId" class="h-12 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-950 outline-none">
-                <option value="">เลือก SO</option>
-                <option v-for="salesOrder in salesOrders" :key="salesOrder.id" :value="salesOrder.id">
-                  {{ salesOrder.soNumber }}{{ salesOrder.description ? ` - ${salesOrder.description}` : '' }}
-                </option>
-              </select>
-            </label>
+              <label class="block">
+                <div class="mb-1 text-sm font-bold text-slate-700">Employee / เจ้าหน้าที่</div>
+                <input
+                  ref="employeeInput"
+                  v-model="employeeScanInput"
+                  type="text"
+                  placeholder="Scan / Enter Employee ID"
+                  list="employee-code-options"
+                  class="h-12 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm font-semibold uppercase text-slate-950 outline-none"
+                  @change="resolveEmployeeId(employeeScanInput)"
+                  @keyup.enter="resolveEmployeeId(employeeScanInput)"
+                />
+                <datalist id="employee-code-options">
+                  <option v-for="employee in employees" :key="employee.id" :value="employee.code">
+                    {{ employee.code }} - {{ employee.name }}
+                  </option>
+                </datalist>
+                <div v-if="selectedEmployee" class="mt-1 min-h-[20px] text-xs font-semibold text-slate-500">
+                  {{ `${selectedEmployee.code} - ${selectedEmployee.name}` }}
+                </div>
+              </label>
 
-        </div>
-      </UCard>
+              <label class="block">
+                <div class="mb-1 text-sm font-bold text-slate-700">Sale Order #</div>
+                <select v-model="salesOrderId" class="h-12 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-950 outline-none">
+                  <option value="">เลือก SO</option>
+                  <option v-for="salesOrder in salesOrders" :key="salesOrder.id" :value="salesOrder.id">
+                    {{ salesOrder.soNumber }}{{ salesOrder.description ? ` - ${salesOrder.description}` : '' }}
+                  </option>
+                </select>
+              </label>
 
-      <div class="grid gap-3">
+              <label class="block">
+                <div class="mb-1 text-sm font-bold text-slate-700">Invoice #</div>
+                <input v-model="invoiceNumber" type="text" placeholder="Invoice #" class="h-12 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-950 outline-none" />
+              </label>
+
+              <label class="block">
+                <div class="mb-1 text-sm font-bold text-slate-700">Charge Channel</div>
+                <select v-model="chargeChannel" class="h-12 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-950 outline-none">
+                  <option>Channel A</option>
+                  <option>Channel B</option>
+                  <option>Channel C</option>
+                  <option>Channel D</option>
+                </select>
+              </label>
+
+              <label class="block">
+                <div class="mb-1 text-sm font-bold text-slate-700">โปรแกรม Charge</div>
+                <select v-model="chargeProgram" class="h-12 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-950 outline-none">
+                  <option>Program 1</option>
+                  <option>Program 2</option>
+                  <option>Program 3</option>
+                </select>
+              </label>
+
+          </div>
+        </UCard>
+
+        <div class="grid gap-3">
         <input
           ref="keyboardBatteryScan"
           v-model="batteryScanInput"
@@ -1173,6 +1560,15 @@ onBeforeUnmount(() => {
           autocomplete="off"
           class="pointer-events-none absolute left-[-9999px] top-0 h-0 w-0 opacity-0"
           @keyup.enter="handleBatteryInput(batteryScanInput)"
+        />
+        <input
+          ref="keyboardVoltageScan"
+          v-model="voltageScanInput"
+          type="text"
+          inputmode="decimal"
+          autocomplete="off"
+          class="pointer-events-none absolute left-[-9999px] top-0 h-0 w-0 opacity-0"
+          @keyup.enter="handleVoltageReaderInput(voltageScanInput)"
         />
 
         <UCard
@@ -1183,8 +1579,8 @@ onBeforeUnmount(() => {
         >
           <div class="flex items-center justify-between gap-3">
             <div>
-              <div class="text-xs font-bold uppercase tracking-[0.2em] text-slate-500">Pallet Layout</div>
-              <div class="mt-1 text-2xl font-black text-slate-950">{{ currentJob?.palletId || 'ยังไม่มีใบงาน' }}</div>
+              <div class="text-xs font-bold uppercase tracking-[0.2em] text-slate-500">Rack Layout</div>
+              <div class="mt-1 text-2xl font-black text-slate-950">{{ currentJob?.palletId || 'ยังไม่มี Rack' }}</div>
             </div>
             <div class="rounded-[14px] border border-slate-200 bg-slate-50 px-4 py-3">
               <div class="flex items-center gap-4">
@@ -1206,10 +1602,9 @@ onBeforeUnmount(() => {
                 <UButton
                   color="neutral"
                   :variant="workflowActionMode === 'voltage' ? 'solid' : 'soft'"
-                  :loading="isMeasuring"
                   class="min-w-[180px] justify-center rounded-2xl px-4 py-3 text-center text-sm font-black"
                   :class="workflowActionMode === 'voltage' ? workflowActionActiveClass : workflowActionIdleClass"
-                  @click="measureActiveSlotFromVoltMeter"
+                  @click="startVoltageWorkflow"
                 >
                   Voltage
                 </UButton>
@@ -1272,21 +1667,6 @@ onBeforeUnmount(() => {
           </div>
         </UCard>
 
-        <div class="grid gap-4 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
-          <div class="rounded-[22px] bg-white/92 px-4 py-4 text-sm text-slate-700 shadow-[0_18px_48px_rgba(15,23,42,0.08)]">
-            <div class="text-sm font-bold text-slate-900">Workflow Rules</div>
-            <ul class="mt-2 space-y-1 text-sm text-slate-600">
-              <li>วัดครั้งแรกต้องเรียงตาม slot 1-21 ห้ามข้าม</li>
-              <li>เลือก slot เดิมเพื่อวัดซ้ำหรือเปลี่ยน Battery ID ได้</li>
-              <li>Delivery confirm แล้วจะ lock ค่าแรงดันและแก้ไขไม่ได้</li>
-            </ul>
-          </div>
-
-          <div class="rounded-[22px] bg-slate-100 px-4 py-4 text-sm text-slate-700">
-            {{ actionMessage }}
-          </div>
-        </div>
-
         <UAlert
           v-if="loadError"
           class="mt-3"
@@ -1295,7 +1675,8 @@ onBeforeUnmount(() => {
           title="Load Error"
           :description="loadError"
         />
-      </div>
+        </div>
+      </template>
 
       <UModal
         v-model:open="detailModalOpen"
@@ -1311,12 +1692,12 @@ onBeforeUnmount(() => {
                 <div class="flex items-start gap-3">
                   <div>
                     <div class="text-xs font-bold uppercase tracking-[0.2em] text-slate-500">Active Slot</div>
-                    <div class="mt-1 text-3xl font-black text-slate-950">Slot {{ selectedSlotNumber }}</div>
+                    <div class="mt-1 text-3xl font-black text-slate-950">Slot {{ editingSlotNumber ?? selectedSlotNumber }}</div>
                   </div>
                 </div>
-                <div class="justify-self-center rounded-[8px] px-3 py-2 text-center" :class="currentPhaseMeta.softTone">
+                    <div class="justify-self-center rounded-[8px] px-3 py-2 text-center" :class="currentPhaseMeta?.softTone ?? 'border border-slate-300 bg-slate-100 text-slate-950'">
                   <div class="text-sm font-black text-slate-950">
-                    Current Phase: {{ currentPhaseMeta.label }}
+                    Current Phase: {{ currentPhaseMeta?.label ?? '-' }}
                   </div>
                 </div>
                 <div class="flex items-start justify-self-end gap-2">
@@ -1368,11 +1749,11 @@ onBeforeUnmount(() => {
         class="pointer-events-none fixed inset-0 z-[70] flex items-center justify-center px-6"
       >
         <div class="min-w-[360px] rounded-[18px] bg-slate-950/92 px-12 py-8 text-center text-white shadow-[0_30px_80px_rgba(15,23,42,0.35)]">
-          <div class="text-sm font-bold uppercase tracking-[0.22em] text-emerald-200">Voltage Read</div>
+          <div class="text-sm font-bold uppercase tracking-[0.22em] text-emerald-200">{{ measurementPopupLabel }}</div>
           <div class="mt-3 text-6xl font-black tracking-tight">
             {{ measurementPopupValue }}
           </div>
-          <div class="mt-2 text-2xl font-bold text-emerald-100">
+          <div v-if="measurementPopupUnit" class="mt-2 text-2xl font-bold text-emerald-100">
             {{ measurementPopupUnit }}
           </div>
         </div>
