@@ -3,9 +3,14 @@ import { createInitialSlots, ensureBatteryJobPhase, ensureOptionalText, ensureRe
 
 interface BatteryJobPayload {
   phase?: string
+  rackId?: string
   palletId?: string
   operatorId?: string | null
   salesOrderId?: string | null
+  invoiceId?: string | null
+  chargeChannelId?: string | null
+  chargeProgramId?: string | null
+  openedAt?: string
   workStartedAt?: string
   notes?: string | null
 }
@@ -13,10 +18,13 @@ interface BatteryJobPayload {
 export default defineEventHandler(async (event) => {
   const body = await readBody<BatteryJobPayload>(event)
   const phase = ensureBatteryJobPhase(body.phase)
-  const palletId = ensureRequiredText(body.palletId, 'palletId').toUpperCase()
-  const workStartedAt = body.workStartedAt ? new Date(body.workStartedAt) : new Date()
+  const rackId = ensureRequiredText(body.rackId ?? body.palletId, 'rackId').toUpperCase()
+  const openedAt = body.openedAt ? new Date(body.openedAt) : body.workStartedAt ? new Date(body.workStartedAt) : new Date()
   const operatorId = ensureOptionalText(body.operatorId)
   const salesOrderId = ensureOptionalText(body.salesOrderId)
+  const invoiceId = ensureOptionalText(body.invoiceId)
+  const chargeChannelId = ensureOptionalText(body.chargeChannelId)
+  const chargeProgramId = ensureOptionalText(body.chargeProgramId)
   const notes = ensureOptionalText(body.notes)
 
   if (phase === 'BEFORE_CHARGE') {
@@ -24,10 +32,13 @@ export default defineEventHandler(async (event) => {
       data: {
         phase,
         status: 'OPEN',
-        palletId,
-        workStartedAt,
+        rackId,
+        openedAt,
         operatorId,
         salesOrderId,
+        invoiceId,
+        chargeChannelId,
+        chargeProgramId,
         notes,
         slots: {
           create: createInitialSlots(),
@@ -36,6 +47,9 @@ export default defineEventHandler(async (event) => {
       include: {
         operator: true,
         salesOrder: true,
+        invoice: true,
+        chargeChannel: true,
+        chargeProgram: true,
         slots: true,
       },
     })
@@ -48,11 +62,14 @@ export default defineEventHandler(async (event) => {
 
   const existingJob = await prisma.batteryJob.findFirst({
     where: {
-      palletId,
+      rackId,
     },
     include: {
       operator: true,
       salesOrder: true,
+      invoice: true,
+      chargeChannel: true,
+      chargeProgram: true,
       slots: true,
     },
     orderBy: {
@@ -63,7 +80,7 @@ export default defineEventHandler(async (event) => {
   if (!existingJob) {
     throw createError({
       statusCode: 404,
-      statusMessage: 'No pallet job found for this pallet ID',
+      statusMessage: 'No rack job found for this rack ID',
     })
   }
 
@@ -74,13 +91,20 @@ export default defineEventHandler(async (event) => {
     data: {
       phase,
       operatorId,
-      workStartedAt,
+      openedAt,
+      salesOrderId,
+      invoiceId,
+      chargeChannelId,
+      chargeProgramId,
       notes,
       ...(phase === 'AFTER_CHARGE' ? { status: existingJob.status === 'READY_FOR_DELIVERY' ? existingJob.status : 'OPEN' } : {}),
     },
     include: {
       operator: true,
       salesOrder: true,
+      invoice: true,
+      chargeChannel: true,
+      chargeProgram: true,
       slots: true,
     },
   })

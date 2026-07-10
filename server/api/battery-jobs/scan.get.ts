@@ -3,15 +3,18 @@ import { ensureRequiredText, formatBatteryJob, getScanDecision } from '../../uti
 
 export default defineEventHandler(async (event) => {
   const query = getQuery(event)
-  const palletId = ensureRequiredText(query.palletId, 'palletId').toUpperCase()
+  const rackId = ensureRequiredText(query.rackId ?? query.palletId, 'rackId').toUpperCase()
 
   const job = await prisma.batteryJob.findFirst({
     where: {
-      palletId,
+      rackId,
     },
     include: {
       operator: true,
       salesOrder: true,
+      invoice: true,
+      chargeChannel: true,
+      chargeProgram: true,
       slots: true,
     },
     orderBy: {
@@ -23,7 +26,8 @@ export default defineEventHandler(async (event) => {
 
   return {
     ok: true,
-    palletId,
+    rackId,
+    palletId: rackId,
     ...decision,
     job: job ? formatBatteryJob(job) : null,
   }

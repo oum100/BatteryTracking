@@ -41,13 +41,23 @@ function createPrismaClient() {
           }
 
           if (process.env.NODE_ENV === 'development') {
-            console.warn('[prisma] transient connection issue detected, retrying once')
+            console.warn('[prisma] transient connection issue detected, reconnecting and retrying once')
           }
 
           await client.$disconnect().catch(() => {})
           await wait(250)
+          await client.$connect().catch(() => {})
 
-          return query(args)
+          try {
+            return await query(args)
+          }
+          catch (retryError) {
+            if (process.env.NODE_ENV === 'development') {
+              console.warn('[prisma] retry after reconnect failed')
+            }
+
+            throw retryError
+          }
         }
       }
     }

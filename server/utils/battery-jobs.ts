@@ -146,18 +146,31 @@ export function allSlotsMeasured(slots: Array<Record<string, any>>, phase: Batte
 }
 
 export function formatBatteryJob(job: Record<string, any>) {
+  const rackId = String(job.rackId ?? job.palletId ?? '')
+  const openedAt = job.openedAt ?? job.workStartedAt ?? null
+
   return {
     id: String(job.id),
     phase: job.phase,
     status: job.status,
-    palletId: String(job.palletId),
-    workStartedAt: job.workStartedAt,
+    rackId,
+    palletId: rackId,
+    openedAt,
+    workStartedAt: openedAt,
     operatorId: job.operatorId ?? null,
     operatorName: job.operator?.name ?? null,
     operatorCode: job.operator?.code ?? null,
     salesOrderId: job.salesOrderId ?? null,
     salesOrderNumber: job.salesOrder?.soNumber ?? null,
     salesOrderDescription: job.salesOrder?.description ?? null,
+    invoiceId: job.invoiceId ?? null,
+    invoiceNumber: job.invoice?.invoiceNo ?? null,
+    chargeChannelId: job.chargeChannelId ?? null,
+    chargeChannelCode: job.chargeChannel?.code ?? null,
+    chargeChannelName: job.chargeChannel?.name ?? null,
+    chargeProgramId: job.chargeProgramId ?? null,
+    chargeProgramCode: job.chargeProgram?.code ?? null,
+    chargeProgramName: job.chargeProgram?.name ?? null,
     beforeChargeCompletedAt: job.beforeChargeCompletedAt,
     afterChargeCompletedAt: job.afterChargeCompletedAt,
     deliveryCompletedAt: job.deliveryCompletedAt,
@@ -223,9 +236,10 @@ export function getScanDecision(job: Record<string, any> | null, now = new Date(
   }
 
   const recommendedPhase = getRecommendedPhase(job)
-  const workStartedAt = job.workStartedAt ? new Date(job.workStartedAt) : null
+  const openedAt = job.openedAt ?? job.workStartedAt ?? null
+  const openedAtDate = openedAt ? new Date(openedAt) : null
   const completed = isBatteryJobFullyCompleted(job)
-  const expired = workStartedAt ? !isSameCalendarDay(workStartedAt, now) : false
+  const expired = openedAtDate ? !isSameCalendarDay(openedAtDate, now) : false
 
   if (completed || expired) {
     return {

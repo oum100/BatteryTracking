@@ -6,6 +6,9 @@ export default defineEventHandler(async () => {
     include: {
       operator: true,
       salesOrder: true,
+      invoice: true,
+      chargeChannel: true,
+      chargeProgram: true,
       slots: true,
     },
     orderBy: {

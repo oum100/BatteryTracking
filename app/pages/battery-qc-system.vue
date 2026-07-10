@@ -1,7 +1,7 @@
 <script setup lang="ts">
 type JobPhase = 'BEFORE_CHARGE' | 'AFTER_CHARGE' | 'DELIVERY'
 type VoltageUnit = 'V' | 'MV'
-type ScanTarget = 'pallet' | 'battery'
+type ScanTarget = 'rack' | 'battery'
 
 interface EmployeeItem {
   id: string
@@ -13,6 +13,24 @@ interface SalesOrderItem {
   id: string
   soNumber: string
   description: string | null
+}
+
+interface InvoiceItem {
+  id: string
+  invoiceNo: string
+  description: string | null
+}
+
+interface ChargeChannelItem {
+  id: string
+  code: string
+  name: string
+}
+
+interface ChargeProgramItem {
+  id: string
+  code: string
+  name: string
 }
 
 interface BatteryJobSlot {
@@ -34,12 +52,22 @@ interface BatteryJobRecord {
   id: string
   phase: JobPhase
   status: 'OPEN' | 'BEFORE_CHARGE_COMPLETED' | 'AFTER_CHARGE_COMPLETED' | 'READY_FOR_DELIVERY'
+  rackId: string
   palletId: string
+  openedAt: string
   workStartedAt: string
   operatorId: string | null
   operatorName: string | null
   salesOrderId: string | null
   salesOrderNumber: string | null
+  invoiceId: string | null
+  invoiceNumber: string | null
+  chargeChannelId: string | null
+  chargeChannelCode: string | null
+  chargeChannelName: string | null
+  chargeProgramId: string | null
+  chargeProgramCode: string | null
+  chargeProgramName: string | null
   beforeChargeCompletedAt: string | null
   afterChargeCompletedAt: string | null
   deliveryCompletedAt: string | null
@@ -49,6 +77,7 @@ interface BatteryJobRecord {
 
 interface ScanDecisionResponse {
   ok: boolean
+  rackId: string
   palletId: string
   found: boolean
   action: 'LOAD_EXISTING' | 'OPEN_NEW_BEFORE_CHARGE'
@@ -61,16 +90,19 @@ const phase = ref<JobPhase | null>(null)
 const currentJob = ref<BatteryJobRecord | null>(null)
 const employees = ref<EmployeeItem[]>([])
 const salesOrders = ref<SalesOrderItem[]>([])
+const invoices = ref<InvoiceItem[]>([])
+const chargeChannels = ref<ChargeChannelItem[]>([])
+const chargePrograms = ref<ChargeProgramItem[]>([])
 const selectedSlotNumber = ref(1)
 const editingSlotNumber = ref<number | null>(null)
-const workStartedAt = ref(toDateTimeLocalValue(new Date()))
+const openedAt = ref(toDateTimeLocalValue(new Date()))
 const operatorId = ref('')
 const employeeScanInput = ref('')
 const salesOrderId = ref('')
-const palletId = ref('')
-const invoiceNumber = ref('')
-const chargeChannel = ref('Channel A')
-const chargeProgram = ref('Program 1')
+const rackId = ref('')
+const invoiceId = ref('')
+const chargeChannelId = ref('')
+const chargeProgramId = ref('')
 const batteryScanInput = ref('')
 const voltageScanInput = ref('')
 const voltageInput = ref('')
@@ -80,7 +112,7 @@ const newEmployeeName = ref('')
 const newSoNumber = ref('')
 const newSoDescription = ref('')
 const detailModalOpen = ref(false)
-const scanTarget = ref<ScanTarget>('pallet')
+const scanTarget = ref<ScanTarget>('rack')
 const bleConnected = ref(false)
 const bleDeviceName = ref('BLE Volt Meter')
 const isBusy = ref(false)
@@ -88,7 +120,7 @@ const isSavingBattery = ref(false)
 const isMeasuring = ref(false)
 const isConfirming = ref(false)
 const loadError = ref('')
-const actionMessage = ref('เปิดใบงานหรือเปิด pallet เพื่อเริ่มงานวัดแรงดัน battery')
+const actionMessage = ref('เปิดใบงานหรือเปิด rack เพื่อเริ่มงานวัดแรงดัน battery')
 const measurementPopupOpen = ref(false)
 const measurementPopupValue = ref('')
 const measurementPopupUnit = ref('')
@@ -98,7 +130,7 @@ const workflowActionMode = ref<'battery' | 'voltage' | null>(null)
 const BLE_SERVICE_UUID = '7f9e0001-6a9d-4f7e-8d4d-32e7be6f1001'
 const BLE_DEVICE_NAME_PREFIX = 'PUMA-Voltmeter-'
 
-const palletInputRef = useTemplateRef<HTMLInputElement>('palletInput')
+const rackInputRef = useTemplateRef<HTMLInputElement>('rackInput')
 const batteryInputRef = useTemplateRef<HTMLInputElement>('batteryInput')
 const voltageInputRef = useTemplateRef<HTMLInputElement>('voltageInput')
 const keyboardBatteryScanRef = useTemplateRef<HTMLInputElement>('keyboardBatteryScan')
@@ -131,8 +163,8 @@ const phaseOptions = [
   },
   {
     value: 'DELIVERY' as const,
-    label: 'QC for Delivery',
-    title: 'QC for Delivery',
+    label: 'QC Before Delivery',
+    title: 'QC Before Delivery',
     detail: 'ตรวจวัดก่อนส่งมอบและยืนยันค่าก่อนจัดส่ง',
     icon: 'i-lucide-truck',
     theme: 'delivery' as const,
@@ -353,10 +385,10 @@ async function focusEmployeeInput() {
   employeeInputRef.value?.select()
 }
 
-async function focusPalletInput() {
+async function focusRackInput() {
   await nextTick()
-  palletInputRef.value?.focus()
-  palletInputRef.value?.select()
+  rackInputRef.value?.focus()
+  rackInputRef.value?.select()
 }
 
 function backToPhaseLanding() {
@@ -451,51 +483,51 @@ function applyScannedValue(value: string) {
     return
   }
 
-  if (scanTarget.value === 'pallet') {
-    palletId.value = normalized
-    workStartedAt.value = toDateTimeLocalValue(new Date())
-    actionMessage.value = `สแกน pallet ${normalized} แล้ว และตั้งเวลาเริ่มงานให้อัตโนมัติ`
+  if (scanTarget.value === 'rack') {
+    rackId.value = normalized
+    openedAt.value = toDateTimeLocalValue(new Date())
+    actionMessage.value = `สแกน rack ${normalized} แล้ว และตั้งเวลาเปิดใบงานให้อัตโนมัติ`
     return
   }
 
   batteryScanInput.value = normalized
 }
 
-function isAutoScanPalletCode(value: string) {
+function isAutoScanRackCode(value: string) {
   return value.startsWith('Z')
 }
 
-async function handleScannedPalletWorkflow(scannedPalletId: string) {
+async function handleScannedRackWorkflow(scannedRackId: string) {
   isBusy.value = true
   loadError.value = ''
 
   try {
     const response = await $fetch<ScanDecisionResponse>('/api/battery-jobs/scan', {
       query: {
-        palletId: scannedPalletId,
+        rackId: scannedRackId,
       },
     })
 
     phase.value = response.recommendedPhase
-    palletId.value = response.palletId
-    workStartedAt.value = toDateTimeLocalValue(new Date())
+    rackId.value = response.rackId || response.palletId
+    openedAt.value = toDateTimeLocalValue(new Date())
 
     if (response.action === 'LOAD_EXISTING' && response.job) {
       applyJob(response.job)
       await armDefaultWorkflow()
-      workStartedAt.value = toDateTimeLocalValue(new Date())
+      openedAt.value = toDateTimeLocalValue(new Date())
       actionMessage.value = response.recommendedPhase === 'AFTER_CHARGE'
-        ? `พบ pallet ${response.palletId} แล้ว ระบบเปิด phase 2 ให้อัตโนมัติ`
+        ? `พบ rack ${response.rackId || response.palletId} แล้ว ระบบเปิด phase 2 ให้อัตโนมัติ`
         : response.recommendedPhase === 'DELIVERY'
-          ? `พบ pallet ${response.palletId} แล้ว ระบบเปิด phase Delivery ให้อัตโนมัติ`
-          : `พบ pallet ${response.palletId} แล้ว ระบบกลับเข้า phase ก่อนชาร์จต่อให้อัตโนมัติ`
+          ? `พบ rack ${response.rackId || response.palletId} แล้ว ระบบเปิด phase Delivery ให้อัตโนมัติ`
+          : `พบ rack ${response.rackId || response.palletId} แล้ว ระบบกลับเข้า phase ก่อนชาร์จต่อให้อัตโนมัติ`
       return
     }
 
     resetCurrentJobState()
     phase.value = 'BEFORE_CHARGE'
-    palletId.value = response.palletId
-    workStartedAt.value = toDateTimeLocalValue(new Date())
+    rackId.value = response.rackId || response.palletId
+    openedAt.value = toDateTimeLocalValue(new Date())
 
     if (operatorId.value && salesOrderId.value) {
       await openCurrentJob(true)
@@ -503,32 +535,32 @@ async function handleScannedPalletWorkflow(scannedPalletId: string) {
     }
 
     actionMessage.value = response.reason === 'JOB_EXPIRED'
-      ? `pallet ${response.palletId} เป็นงานข้ามวัน ระบบเตรียม phase 1 ใหม่แล้ว เลือกเจ้าหน้าที่และ SO เพื่อเปิดใบงาน`
+      ? `rack ${response.rackId || response.palletId} เป็นงานข้ามวัน ระบบเตรียม phase 1 ใหม่แล้ว เลือกเจ้าหน้าที่และ SO เพื่อเปิดใบงาน`
       : response.reason === 'ALL_PHASES_COMPLETED'
-        ? `pallet ${response.palletId} ทำครบ 3 phase แล้ว ระบบเตรียม phase 1 ใหม่ไว้ให้`
-        : `ไม่พบ pallet ${response.palletId} ในระบบ ระบบเตรียม phase 1 ใหม่ไว้ให้`
+        ? `rack ${response.rackId || response.palletId} ทำครบ 3 phase แล้ว ระบบเตรียม phase 1 ใหม่ไว้ให้`
+        : `ไม่พบ rack ${response.rackId || response.palletId} ในระบบ ระบบเตรียม phase 1 ใหม่ไว้ให้`
     await focusEmployeeInput()
   }
   catch (error) {
-    loadError.value = error instanceof Error ? error.message : 'Unable to scan pallet'
+    loadError.value = error instanceof Error ? error.message : 'Unable to scan rack'
   }
   finally {
     isBusy.value = false
   }
 }
 
-async function handlePalletInput(value: string) {
-  palletId.value = value.toUpperCase()
+async function handleRackInput(value: string) {
+  rackId.value = value.toUpperCase()
 
-  if (!palletId.value.trim()) {
+  if (!rackId.value.trim()) {
     return
   }
 
-  scanTarget.value = 'pallet'
-  applyScannedValue(palletId.value)
+  scanTarget.value = 'rack'
+  applyScannedValue(rackId.value)
 
-  if (isAutoScanPalletCode(palletId.value)) {
-    await handleScannedPalletWorkflow(palletId.value)
+  if (isAutoScanRackCode(rackId.value)) {
+    await handleScannedRackWorkflow(rackId.value)
     return
   }
 
@@ -820,16 +852,29 @@ function getSlotCardUi(slot: BatteryJobSlot) {
 }
 
 function normalizeJob(job: any): BatteryJobRecord {
+  const normalizedRackId = String(job.rackId ?? job.palletId ?? '')
+  const normalizedOpenedAt = String(job.openedAt ?? job.workStartedAt ?? new Date().toISOString())
+
   return {
     id: String(job.id),
     phase: job.phase as JobPhase,
     status: job.status,
-    palletId: String(job.palletId),
-    workStartedAt: String(job.workStartedAt),
+    rackId: normalizedRackId,
+    palletId: normalizedRackId,
+    openedAt: normalizedOpenedAt,
+    workStartedAt: normalizedOpenedAt,
     operatorId: job.operatorId ? String(job.operatorId) : null,
     operatorName: job.operatorName ? String(job.operatorName) : null,
     salesOrderId: job.salesOrderId ? String(job.salesOrderId) : null,
     salesOrderNumber: job.salesOrderNumber ? String(job.salesOrderNumber) : null,
+    invoiceId: job.invoiceId ? String(job.invoiceId) : null,
+    invoiceNumber: job.invoiceNumber ? String(job.invoiceNumber) : null,
+    chargeChannelId: job.chargeChannelId ? String(job.chargeChannelId) : null,
+    chargeChannelCode: job.chargeChannelCode ? String(job.chargeChannelCode) : null,
+    chargeChannelName: job.chargeChannelName ? String(job.chargeChannelName) : null,
+    chargeProgramId: job.chargeProgramId ? String(job.chargeProgramId) : null,
+    chargeProgramCode: job.chargeProgramCode ? String(job.chargeProgramCode) : null,
+    chargeProgramName: job.chargeProgramName ? String(job.chargeProgramName) : null,
     beforeChargeCompletedAt: job.beforeChargeCompletedAt ? String(job.beforeChargeCompletedAt) : null,
     afterChargeCompletedAt: job.afterChargeCompletedAt ? String(job.afterChargeCompletedAt) : null,
     deliveryCompletedAt: job.deliveryCompletedAt ? String(job.deliveryCompletedAt) : null,
@@ -855,11 +900,14 @@ function normalizeJob(job: any): BatteryJobRecord {
 
 function applyJob(job: any) {
   currentJob.value = normalizeJob(job)
-  palletId.value = currentJob.value.palletId
-  workStartedAt.value = toDateTimeLocalValue(new Date(currentJob.value.workStartedAt))
+  rackId.value = currentJob.value.rackId
+  openedAt.value = toDateTimeLocalValue(new Date(currentJob.value.openedAt))
   operatorId.value = currentJob.value.operatorId ?? ''
   employeeScanInput.value = selectedEmployee.value?.code ?? ''
   salesOrderId.value = currentJob.value.salesOrderId ?? ''
+  invoiceId.value = currentJob.value.invoiceId ?? ''
+  chargeChannelId.value = currentJob.value.chargeChannelId ?? ''
+  chargeProgramId.value = currentJob.value.chargeProgramId ?? ''
   selectedSlotNumber.value = currentJob.value.slots.find(slot => !getPhaseVoltage(slot, phase.value))?.slotNumber ?? 1
   syncSelectedSlot()
   if (detailModalOpen.value && editingSlotNumber.value) {
@@ -895,9 +943,9 @@ function selectPhase(nextPhase: JobPhase) {
   batteryScanInput.value = ''
   voltageInput.value = ''
   actionMessage.value = nextPhase === 'BEFORE_CHARGE'
-    ? 'เปิดใบงานใหม่สำหรับ pallet ที่กำลังจัดเตรียมก่อนชาร์จ'
-    : 'เปิด pallet เดิมเพื่อวัดแรงดันตามตำแหน่งเดิม'
-  void focusPalletInput()
+    ? 'เปิดใบงานใหม่สำหรับ rack ที่กำลังจัดเตรียมก่อนชาร์จ'
+    : 'เปิด rack เดิมเพื่อวัดแรงดันตามตำแหน่งเดิม'
+  void focusRackInput()
 }
 
 function selectSlot(slotNumber: number) {
@@ -946,13 +994,19 @@ async function advanceToSlot(nextSlotNumber: number | null) {
 }
 
 async function loadMasters() {
-  const [employeeResponse, salesOrderResponse] = await Promise.all([
+  const [employeeResponse, salesOrderResponse, invoiceResponse, chargeChannelResponse, chargeProgramResponse] = await Promise.all([
     $fetch<{ employees: EmployeeItem[] }>('/api/employees'),
     $fetch<{ salesOrders: SalesOrderItem[] }>('/api/sales-orders'),
+    $fetch<{ invoices: InvoiceItem[] }>('/api/invoices'),
+    $fetch<{ chargeChannels: ChargeChannelItem[] }>('/api/charge-channels'),
+    $fetch<{ chargePrograms: ChargeProgramItem[] }>('/api/charge-programs'),
   ])
 
   employees.value = employeeResponse.employees
   salesOrders.value = salesOrderResponse.salesOrders
+  invoices.value = invoiceResponse.invoices
+  chargeChannels.value = chargeChannelResponse.chargeChannels
+  chargePrograms.value = chargeProgramResponse.chargePrograms
 }
 
 async function createEmployee() {
@@ -1003,8 +1057,8 @@ async function openCurrentJob(skipRequiredValidation = false) {
     return
   }
 
-  if (!palletId.value.trim()) {
-    actionMessage.value = 'กรอกหรือ scan pallet ID ก่อน'
+  if (!rackId.value.trim()) {
+    actionMessage.value = 'กรอกหรือ scan rack ID ก่อน'
     return
   }
 
@@ -1026,18 +1080,21 @@ async function openCurrentJob(skipRequiredValidation = false) {
       method: 'POST',
       body: {
         phase: phase.value,
-        palletId: palletId.value,
+        rackId: rackId.value,
         operatorId: operatorId.value || null,
         salesOrderId: salesOrderId.value || null,
-        workStartedAt: new Date(workStartedAt.value).toISOString(),
+        invoiceId: invoiceId.value || null,
+        chargeChannelId: chargeChannelId.value || null,
+        chargeProgramId: chargeProgramId.value || null,
+        openedAt: new Date(openedAt.value).toISOString(),
       },
     })
 
     applyJob(response.job)
     await armDefaultWorkflow()
     actionMessage.value = phase.value === 'BEFORE_CHARGE'
-      ? `เปิดใบงาน pallet ${palletId.value.toUpperCase()} แล้ว เริ่มที่ slot 1`
-      : `เปิด pallet ${palletId.value.toUpperCase()} แล้ว เริ่มวัดตามลำดับเดิม`
+      ? `เปิดใบงาน rack ${rackId.value.toUpperCase()} แล้ว เริ่มที่ slot 1`
+      : `เปิด rack ${rackId.value.toUpperCase()} แล้ว เริ่มวัดตามลำดับเดิม`
   }
   catch (error) {
     loadError.value = error instanceof Error ? error.message : 'Unable to open job'
@@ -1047,14 +1104,14 @@ async function openCurrentJob(skipRequiredValidation = false) {
   }
 }
 
-async function loadExistingPallet() {
+async function loadExistingRack() {
   if (!phase.value) {
-    actionMessage.value = 'เลือก phase ก่อนโหลด pallet'
+    actionMessage.value = 'เลือก phase ก่อนโหลด rack'
     return
   }
 
-  if (!palletId.value.trim()) {
-    actionMessage.value = 'กรอก pallet ID ก่อนค้นหา'
+  if (!rackId.value.trim()) {
+    actionMessage.value = 'กรอก rack ID ก่อนค้นหา'
     return
   }
 
@@ -1064,17 +1121,17 @@ async function loadExistingPallet() {
   try {
     const response = await $fetch<{ job: BatteryJobRecord }>('/api/battery-jobs/pallet', {
       query: {
-        palletId: palletId.value,
+        rackId: rackId.value,
         phase: phase.value,
       },
     })
 
     applyJob(response.job)
     await armDefaultWorkflow()
-    actionMessage.value = `โหลด pallet ${palletId.value.toUpperCase()} สำเร็จ`
+    actionMessage.value = `โหลด rack ${rackId.value.toUpperCase()} สำเร็จ`
   }
   catch (error) {
-    loadError.value = error instanceof Error ? error.message : 'Unable to load pallet'
+    loadError.value = error instanceof Error ? error.message : 'Unable to load rack'
   }
   finally {
     isBusy.value = false
@@ -1185,7 +1242,7 @@ async function saveActiveSlotVoltage(voltageValue: string) {
         batteryId: phase.value === 'BEFORE_CHARGE' ? (activeSlot.batteryId || batteryScanInput.value || '') : null,
         voltage: voltageValue,
         voltageUnit: 'V',
-        measuredAt: new Date(workStartedAt.value).toISOString(),
+        measuredAt: new Date().toISOString(),
       },
     })
 
@@ -1263,7 +1320,7 @@ async function measureActiveSlotFromVoltMeter() {
         batteryId: phase.value === 'BEFORE_CHARGE' ? (activeSlot.batteryId || batteryScanInput.value || '') : null,
         voltage: measuredVoltage.toFixed(3),
         voltageUnit: 'V',
-        measuredAt: new Date(workStartedAt.value).toISOString(),
+        measuredAt: new Date().toISOString(),
       },
     })
 
@@ -1321,7 +1378,7 @@ async function measureSelectedSlot() {
         batteryId: phase.value === 'BEFORE_CHARGE' ? (batteryScanInput.value || modalSelectedSlot.value?.batteryId || '') : null,
         voltage: voltageInput.value,
         voltageUnit: voltageUnit.value,
-        measuredAt: new Date(workStartedAt.value).toISOString(),
+        measuredAt: new Date().toISOString(),
       },
     })
 
@@ -1539,12 +1596,12 @@ onBeforeUnmount(() => {
               <label class="block">
                 <div class="mb-1 text-sm font-bold text-slate-700">Rack No</div>
                 <input
-                  ref="palletInput"
-                  v-model="palletId"
+                  ref="rackInput"
+                  v-model="rackId"
                   type="text"
                   placeholder="Scan Rack QR"
                   class="h-12 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm font-semibold uppercase text-slate-950 outline-none"
-                  @keyup.enter="handlePalletInput(palletId)"
+                  @keyup.enter="handleRackInput(rackId)"
                 />
               </label>
 
@@ -1582,25 +1639,31 @@ onBeforeUnmount(() => {
 
               <label class="block">
                 <div class="mb-1 text-sm font-bold text-slate-700">Invoice #</div>
-                <input v-model="invoiceNumber" type="text" placeholder="Invoice #" class="h-12 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-950 outline-none" />
+                <select v-model="invoiceId" class="h-12 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-950 outline-none">
+                  <option value="">เลือก Invoice</option>
+                  <option v-for="invoice in invoices" :key="invoice.id" :value="invoice.id">
+                    {{ invoice.invoiceNo }}{{ invoice.description ? ` - ${invoice.description}` : '' }}
+                  </option>
+                </select>
               </label>
 
               <label class="block">
                 <div class="mb-1 text-sm font-bold text-slate-700">Charge Channel</div>
-                <select v-model="chargeChannel" class="h-12 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-950 outline-none">
-                  <option>Channel A</option>
-                  <option>Channel B</option>
-                  <option>Channel C</option>
-                  <option>Channel D</option>
+                <select v-model="chargeChannelId" class="h-12 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-950 outline-none">
+                  <option value="">เลือก Channel</option>
+                  <option v-for="channel in chargeChannels" :key="channel.id" :value="channel.id">
+                    {{ channel.name }}
+                  </option>
                 </select>
               </label>
 
               <label class="block">
                 <div class="mb-1 text-sm font-bold text-slate-700">โปรแกรม Charge</div>
-                <select v-model="chargeProgram" class="h-12 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-950 outline-none">
-                  <option>Program 1</option>
-                  <option>Program 2</option>
-                  <option>Program 3</option>
+                <select v-model="chargeProgramId" class="h-12 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-950 outline-none">
+                  <option value="">เลือก Program</option>
+                  <option v-for="program in chargePrograms" :key="program.id" :value="program.id">
+                    {{ program.name }}
+                  </option>
                 </select>
               </label>
 
@@ -1636,7 +1699,7 @@ onBeforeUnmount(() => {
           <div class="flex items-center justify-between gap-3">
             <div>
               <div class="text-xs font-bold uppercase tracking-[0.2em] text-slate-500">Rack Layout</div>
-              <div class="mt-1 text-2xl font-black text-slate-950">{{ currentJob?.palletId || 'ยังไม่มี Rack' }}</div>
+              <div class="mt-1 text-2xl font-black text-slate-950">{{ currentJob?.rackId || 'ยังไม่มี Rack' }}</div>
             </div>
             <div class="rounded-[14px] border border-slate-200 bg-slate-50 px-4 py-3">
               <div class="flex items-center gap-4">
@@ -1701,9 +1764,9 @@ onBeforeUnmount(() => {
             </div>
           </div>
           <div v-else class="mt-4 rounded-[22px] border border-dashed border-slate-300 bg-slate-50 px-6 py-12 text-center">
-            <div class="text-lg font-black text-slate-900">ยังไม่มีข้อมูล pallet</div>
+            <div class="text-lg font-black text-slate-900">ยังไม่มีข้อมูล rack</div>
             <div class="mt-2 text-sm text-slate-600">
-              เปิดใบงานใหม่หรือโหลด pallet เดิมก่อน แล้วระบบจะแสดงตำแหน่ง battery ทั้ง 21 slot ที่นี่
+              เปิดใบงานใหม่หรือโหลด rack เดิมก่อน แล้วระบบจะแสดงตำแหน่ง battery ทั้ง 21 slot ที่นี่
             </div>
           </div>
         </UCard>

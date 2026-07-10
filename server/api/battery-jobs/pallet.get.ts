@@ -4,15 +4,18 @@ import { ensureBatteryJobPhase, ensureRequiredText, formatBatteryJob } from '../
 export default defineEventHandler(async (event) => {
   const query = getQuery(event)
   const phase = query.phase ? ensureBatteryJobPhase(query.phase) : null
-  const palletId = ensureRequiredText(query.palletId, 'palletId').toUpperCase()
+  const rackId = ensureRequiredText(query.rackId ?? query.palletId, 'rackId').toUpperCase()
 
   const job = await prisma.batteryJob.findFirst({
     where: {
-      palletId,
+      rackId,
     },
     include: {
       operator: true,
       salesOrder: true,
+      invoice: true,
+      chargeChannel: true,
+      chargeProgram: true,
       slots: true,
     },
     orderBy: {
@@ -23,7 +26,7 @@ export default defineEventHandler(async (event) => {
   if (!job) {
     throw createError({
       statusCode: 404,
-      statusMessage: 'Pallet job not found',
+      statusMessage: 'Rack job not found',
     })
   }
 
@@ -32,6 +35,8 @@ export default defineEventHandler(async (event) => {
   return {
     ok: true,
     phase,
+    rackId,
+    palletId: rackId,
     job: normalizedJob,
   }
 })

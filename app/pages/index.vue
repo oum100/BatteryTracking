@@ -1,14 +1,23 @@
 <script setup lang="ts">
-const workspaceLinks = [
+const featuredLink = {
+  label: 'Battery QC System',
+  path: '/battery-qc-system',
+  className: 'justify-between rounded-[24px] bg-[linear-gradient(135deg,_#b1003f_0%,_#d9044f_55%,_#f23c76_100%)] px-6 py-6 text-left text-lg font-bold text-white hover:brightness-105',
+} as const
+
+const qcWorkspaceLinks = [
+  {
+    label: 'QC Report',
+    path: '/qc-report',
+    className: 'justify-between rounded-[20px] border border-rose-200 bg-rose-50 px-5 py-4 text-left text-base font-bold text-rose-950 hover:bg-rose-100',
+  },
+] as const
+
+const operationLinks = [
   {
     label: 'Battery Movement V2',
     path: '/battery-movement',
     className: 'justify-between rounded-2xl bg-lime-600 px-5 py-5 text-left text-lg font-bold text-white hover:bg-lime-700',
-  },
-  {
-    label: 'Battery QC System',
-    path: '/battery-qc-system',
-    className: 'justify-between rounded-2xl bg-rose-700 px-5 py-5 text-left text-lg font-bold text-white hover:bg-rose-800',
   },
   {
     label: 'New Batt Job',
@@ -25,6 +34,9 @@ const workspaceLinks = [
     path: '/batt-movement-ble',
     className: 'justify-between rounded-2xl bg-sky-700 px-5 py-5 text-left text-lg font-bold text-white hover:bg-sky-800',
   },
+] as const
+
+const historyLinks = [
   {
     label: 'Mobile History',
     path: '/movement-history',
@@ -63,7 +75,7 @@ function getWorkspaceHref(path: string) {
           root: 'overflow-hidden'
         }"
       >
-        <div class="space-y-8">
+        <div class="space-y-6">
           <div class="space-y-4">
             <UBadge class="rounded-full bg-slate-800 px-4 py-2 text-sm font-bold tracking-[0.22em] text-white">
               BatteryTracking
@@ -79,27 +91,129 @@ function getWorkspaceHref(path: string) {
             </div>
           </div>
 
-          <div class="grid gap-4">
-            <UButton
-              v-for="link in workspaceLinks"
-              :key="link.path"
-              :href="getWorkspaceHref(link.path)"
-              external
-              block
-              size="xl"
-              color="neutral"
-              variant="solid"
-              :class="link.className"
-              :ui="{
-                base: 'w-full justify-between',
-                leadingIcon: 'text-white',
-                trailingIcon: 'text-white',
-                label: 'text-white font-bold text-lg'
-              }"
-            >
-              <span>{{ link.label }}</span>
-              <UIcon name="i-lucide-arrow-right" class="size-6 shrink-0 text-white" />
-            </UButton>
+          <div class="space-y-5">
+            <div class="rounded-[26px] border border-rose-200 bg-white p-3 shadow-[0_18px_40px_rgba(190,24,93,0.08)]">
+              <div class="mb-3 px-2">
+                <div class="text-xs font-black uppercase tracking-[0.24em] text-rose-500">QC Workspace</div>
+              </div>
+
+              <UButton
+                :href="getWorkspaceHref(featuredLink.path)"
+                external
+                block
+                size="xl"
+                color="neutral"
+                variant="solid"
+                :class="featuredLink.className"
+                :ui="{
+                  base: 'w-full justify-between',
+                  leadingIcon: 'text-white',
+                  trailingIcon: 'text-white',
+                  label: 'text-white font-bold text-lg'
+                }"
+              >
+                <span>{{ featuredLink.label }}</span>
+                <UIcon name="i-lucide-arrow-right" class="size-6 shrink-0 text-white" />
+              </UButton>
+
+              <div class="mt-3 grid gap-3">
+                <UButton
+                  v-for="link in qcWorkspaceLinks"
+                  :key="link.path"
+                  :href="getWorkspaceHref(link.path)"
+                  external
+                  block
+                  size="xl"
+                  color="neutral"
+                  variant="solid"
+                  :class="link.className"
+                  :ui="{
+                    base: 'w-full justify-between',
+                    trailingIcon: 'text-current',
+                    label: 'font-bold'
+                  }"
+                >
+                  <span>{{ link.label }}</span>
+                  <UIcon name="i-lucide-arrow-right" class="size-5 shrink-0" />
+                </UButton>
+              </div>
+            </div>
+
+            <div class="grid gap-5 lg:grid-cols-2">
+              <UCard
+                :ui="{
+                  root: 'rounded-[24px] border-0 bg-slate-50 shadow-[0_18px_40px_rgba(15,23,42,0.06)] ring-1 ring-slate-200',
+                  body: 'p-4'
+                }"
+              >
+                <div class="space-y-4">
+                  <div>
+                    <div class="text-xs font-black uppercase tracking-[0.24em] text-slate-500">Operations</div>
+                    <div class="mt-1 text-xl font-black text-slate-950">Daily Tools</div>
+                  </div>
+
+                  <div class="grid gap-3">
+                    <UButton
+                      v-for="link in operationLinks"
+                      :key="link.path"
+                      :href="getWorkspaceHref(link.path)"
+                      external
+                      block
+                      size="xl"
+                      color="neutral"
+                      variant="solid"
+                      :class="link.className"
+                      :ui="{
+                        base: 'w-full justify-between',
+                        leadingIcon: 'text-white',
+                        trailingIcon: 'text-white',
+                        label: 'text-white font-bold text-lg'
+                      }"
+                    >
+                      <span>{{ link.label }}</span>
+                      <UIcon name="i-lucide-arrow-right" class="size-6 shrink-0 text-white" />
+                    </UButton>
+                  </div>
+                </div>
+              </UCard>
+
+              <UCard
+                :ui="{
+                  root: 'rounded-[24px] border-0 bg-slate-50 shadow-[0_18px_40px_rgba(15,23,42,0.06)] ring-1 ring-slate-200',
+                  body: 'p-4'
+                }"
+              >
+                <div class="space-y-4">
+                  <div>
+                    <div class="text-xs font-black uppercase tracking-[0.24em] text-slate-500">History</div>
+                    <div class="mt-1 text-xl font-black text-slate-950">Review & Tracking</div>
+                  </div>
+
+                  <div class="grid gap-3">
+                    <UButton
+                      v-for="link in historyLinks"
+                      :key="link.path"
+                      :href="getWorkspaceHref(link.path)"
+                      external
+                      block
+                      size="xl"
+                      color="neutral"
+                      variant="solid"
+                      :class="link.className"
+                      :ui="{
+                        base: 'w-full justify-between',
+                        leadingIcon: 'text-white',
+                        trailingIcon: 'text-white',
+                        label: 'text-white font-bold text-lg'
+                      }"
+                    >
+                      <span>{{ link.label }}</span>
+                      <UIcon name="i-lucide-arrow-right" class="size-6 shrink-0 text-white" />
+                    </UButton>
+                  </div>
+                </div>
+              </UCard>
+            </div>
           </div>
         </div>
       </UCard>

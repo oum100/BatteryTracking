@@ -88,16 +88,60 @@ model SalesOrder {
   @@index([active, soNumber])
 }
 
+model Invoice {
+  id          String       @id @default(cuid())
+  invoiceNo   String       @unique
+  description String?
+  active      Boolean      @default(true)
+  jobs        BatteryJob[]
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  @@index([active, invoiceNo])
+}
+
+model ChargeChannel {
+  id        String       @id @default(cuid())
+  code      String       @unique
+  name      String
+  active    Boolean      @default(true)
+  jobs      BatteryJob[]
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  @@index([active, code])
+  @@index([active, name])
+}
+
+model ChargeProgram {
+  id        String       @id @default(cuid())
+  code      String       @unique
+  name      String
+  active    Boolean      @default(true)
+  jobs      BatteryJob[]
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  @@index([active, code])
+  @@index([active, name])
+}
+
 model BatteryJob {
   id                       String            @id @default(cuid())
   phase                    BatteryJobPhase   @default(BEFORE_CHARGE)
   status                   BatteryJobStatus  @default(OPEN)
-  palletId                 String
-  workStartedAt            DateTime
+  rackId                   String
+  openedAt                 DateTime
   operatorId               String?
   operator                 Employee?         @relation(fields: [operatorId], references: [id], onDelete: SetNull)
   salesOrderId             String?
   salesOrder               SalesOrder?       @relation(fields: [salesOrderId], references: [id], onDelete: SetNull)
+  invoiceId                String?
+  invoice                  Invoice?          @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  chargeChannelId          String?
+  chargeChannel            ChargeChannel?    @relation(fields: [chargeChannelId], references: [id], onDelete: SetNull)
+  chargeProgramId          String?
+  chargeProgram            ChargeProgram?    @relation(fields: [chargeProgramId], references: [id], onDelete: SetNull)
   beforeChargeCompletedAt  DateTime?
   afterChargeCompletedAt   DateTime?
   deliveryCompletedAt      DateTime?
@@ -107,7 +151,8 @@ model BatteryJob {
   createdAt                DateTime          @default(now())
   updatedAt                DateTime          @updatedAt
 
-  @@index([palletId, createdAt])
+  @@index([rackId, createdAt])
+  @@index([rackId, status, createdAt])
   @@index([status, phase, createdAt])
 }
 
