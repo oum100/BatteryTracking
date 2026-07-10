@@ -115,6 +115,7 @@ const phaseOptions = [
     title: 'QC Before Charge',
     detail: 'บันทึก Battery ID และค่าแรงดันก่อนชาร์จ',
     icon: 'i-lucide-battery-low',
+    theme: 'before' as const,
     tone: 'bg-lime-700 text-white hover:bg-lime-800 active:bg-lime-900',
     softTone: 'border border-lime-300 bg-lime-100 text-lime-950',
   },
@@ -124,6 +125,7 @@ const phaseOptions = [
     title: 'QC After Charge',
     detail: 'อ่านค่าแรงดันหลังชาร์จตามตำแหน่งเดิม',
     icon: 'i-lucide-battery-full',
+    theme: 'after' as const,
     tone: 'bg-sky-700 text-white hover:bg-sky-800 active:bg-sky-900',
     softTone: 'border border-sky-300 bg-sky-100 text-sky-950',
   },
@@ -133,6 +135,7 @@ const phaseOptions = [
     title: 'QC for Delivery',
     detail: 'ตรวจวัดก่อนส่งมอบและยืนยันค่าก่อนจัดส่ง',
     icon: 'i-lucide-truck',
+    theme: 'delivery' as const,
     tone: 'bg-amber-700 text-white hover:bg-amber-800 active:bg-amber-900',
     softTone: 'border border-amber-300 bg-amber-100 text-amber-950',
   },
@@ -1415,19 +1418,19 @@ onBeforeUnmount(() => {
         v-if="!hasPhaseSelected"
         :ui="{
           root: 'rounded-[24px] border-0 bg-[#2f2f32] shadow-[0_24px_80px_rgba(15,23,42,0.16)] ring-1 ring-slate-950/10',
-          body: 'p-4'
+          body: 'px-5 py-3'
         }"
       >
-        <div class="grid items-center gap-4 lg:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]">
+        <div class="grid items-center gap-3 lg:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]">
           <div>
-            <div class="text-xs text-white/80 sm:text-sm">MF Auto Workspace</div>
-            <h1 class="mt-2 text-[2.1rem] font-black leading-none tracking-tight text-white sm:text-4xl">
+            <div class="text-[11px] text-white/80 sm:text-xs">MF Auto Workspace</div>
+            <h1 class="mt-1.5 text-[1.9rem] font-black leading-none tracking-tight text-white sm:text-[2.35rem]">
               Battery QC System
             </h1>
           </div>
 
           <div class="flex justify-center lg:justify-self-center">
-            <img src="/branding/logo-puma-battery.png" alt="PUMA Battery" class="h-16 w-auto object-contain sm:h-24" />
+            <img src="/branding/logo-puma-battery.png" alt="PUMA Battery" class="h-12 w-auto object-contain sm:h-16" />
           </div>
 
           <div />
@@ -1436,32 +1439,15 @@ onBeforeUnmount(() => {
 
       <div v-if="!hasPhaseSelected" class="flex min-h-[52vh] items-center justify-center">
         <div class="grid w-full max-w-[1180px] gap-5 lg:grid-cols-3">
-          <button
+          <BatteryQcModeCard
             v-for="option in phaseOptions"
             :key="option.value"
-            type="button"
-            class="min-h-[180px] border-2 px-6 py-6 text-left shadow-[0_24px_60px_rgba(15,23,42,0.12)] transition-all duration-200 hover:-translate-y-1 hover:shadow-[0_30px_70px_rgba(15,23,42,0.16)] active:translate-y-0 sm:min-h-[220px] sm:px-8 sm:py-8"
-            :class="[
-              option.value === 'BEFORE_CHARGE'
-                ? 'border-lime-500 bg-[linear-gradient(180deg,_#f4ffe7_0%,_#e5f7cf_100%)] text-lime-950'
-                : option.value === 'AFTER_CHARGE'
-                  ? 'border-sky-500 bg-[linear-gradient(180deg,_#eef7ff_0%,_#dbeeff_100%)] text-sky-950'
-                  : 'border-amber-500 bg-[linear-gradient(180deg,_#fff5e7_0%,_#ffe6bf_100%)] text-amber-950',
-              'rounded-xl'
-            ]"
-            @click="selectPhase(option.value)"
-          >
-            <div class="flex items-start justify-between gap-4 sm:gap-6">
-              <div class="text-xs font-black uppercase tracking-[0.18em] opacity-70 sm:text-sm sm:tracking-[0.22em]">Select Mode</div>
-              <div
-                class="flex h-16 w-16 shrink-0 items-center justify-center rounded-xl border border-current/15 bg-white/55 shadow-[0_12px_24px_rgba(15,23,42,0.08)] sm:h-20 sm:w-20"
-              >
-                <UIcon :name="option.icon" class="size-9 sm:size-11" />
-              </div>
-            </div>
-            <div class="mt-5 text-[1.4rem] font-black leading-tight tracking-[-0.03em] sm:mt-6 sm:text-[2.15rem]">{{ option.label }}</div>
-            <div class="mt-3 text-sm font-semibold opacity-90 sm:mt-4 sm:text-base">{{ option.detail }}</div>
-          </button>
+            :label="option.label"
+            :detail="option.detail"
+            :icon="option.icon"
+            :theme="option.theme"
+            @select="selectPhase(option.value)"
+          />
         </div>
       </div>
 
