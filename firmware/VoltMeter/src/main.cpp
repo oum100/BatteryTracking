@@ -5,7 +5,9 @@
 #include <WebServer.h>
 #include <WiFi.h>
 #include <WiFiManager.h>
-#include <NimBLEDevice.h>
+#include <BLEDevice.h>
+#include <BLEHIDDevice.h>
+#include <BLESecurity.h>
 #include "esp_wifi.h"
 #include <math.h>
 
@@ -22,11 +24,11 @@ const char* PREF_DIVIDER_RATIO_KEY = "divider";
 const char* PREF_ADC_GAIN_KEY = "adc_gain";
 const char* PREF_ADC_OFFSET_KEY = "adc_off";
 
-const char* MEASUREMENT_SERVICE_UUID = "7f9e0001-6a9d-4f7e-8d4d-32e7be6f1001";
-const char* MEASUREMENT_CHARACTERISTIC_UUID = "7f9e0002-6a9d-4f7e-8d4d-32e7be6f1001";
-const char* CONTROL_CHARACTERISTIC_UUID = "7f9e0003-6a9d-4f7e-8d4d-32e7be6f1001";
-const uint16_t MEASUREMENT_CHARACTERISTIC_MAX_LEN = 384;
-const uint16_t CONTROL_CHARACTERISTIC_MAX_LEN = 96;
+const uint8_t KEYBOARD_REPORT_ID = 0x01;
+const uint8_t KEY_MOD_NONE = 0x00;
+const uint8_t KEY_CODE_ENTER = 0x28;
+const uint8_t KEY_CODE_MINUS = 0x2D;
+const uint8_t KEY_CODE_DOT = 0x37;
 
 const int8_t WIFI_MAX_TX_POWER_QUARTER_DBM = 60;
 
@@ -47,7 +49,7 @@ const int8_t WIFI_MAX_TX_POWER_QUARTER_DBM = 60;
 #endif
 
 const int VOLTAGE_PIN = A0;
-const int LIFT_SW_PIN = A1;
+const int ACTION_BUTTON_PIN = 1;
 const int RGB_PIN = A2;
 const int BOOT_BUTTON_PIN = A9;
 const int STATUS_LED_PIN = 8;
@@ -90,7 +92,10 @@ const int SAMPLE_WINDOW = 8;
 const float STABLE_DELTA = 0.12f;
 const int STABLE_HITS_REQUIRED = 3;
 const int DEFAULT_AUTO_CAL_SAMPLES = 24;
-const unsigned long BLE_NOTIFY_INTERVAL_MS = 250;
+const unsigned long HID_KEY_PRESS_MS = 12;
+const unsigned long HID_KEY_RELEASE_MS = 10;
+const unsigned long HID_TYPE_GUARD_MS = 32;
+const unsigned long SEND_ARM_DEBOUNCE_MS = 30;
 const unsigned long MODE_LED_BLINK_ON_MS = 45;
 const unsigned long MODE_LED_BLINK_OFF_MS = 170;
 const unsigned long MODE_LED_PATTERN_GAP_MS = 1200;
@@ -119,7 +124,6 @@ unsigned long lastNotifyAt = 0;
 unsigned long sampledAtMs = 0;
 
 String measurementPayload = "";
-String lastNotifiedPayload = "";
 String deviceId = "";
 String deviceSuffix = "";
 String bleDeviceName = "";
@@ -128,7 +132,7 @@ String wifiStatusMessage = "booting";
 String wifiFailureReason = "";
 String bleStatusMessage = "inactive";
 String serialInputBuffer = "";
-String lastBleControlMessage = "ready";
+String lastKeyboardTypedValue = "";
 bool serialDebugEnabled = false;
 int pendingDebugSamples = 0;
 bool useLiftSwitch = USE_LIFT_SWITCH;
@@ -148,6 +152,11 @@ uint8_t rgbTestIndex = 0;
 bool systemReady = false;
 bool rgbBootAnimationPending = false;
 bool lastMeasurementStable = false;
+bool hidSendArmed = false;
+bool hidTypedDuringCurrentCycle = false;
+bool lastBootButtonReading = false;
+bool lastActionButtonRawState = true;
+unsigned long bootButtonPressedAt = 0;
 unsigned long stableReadHoldUntil = 0;
 unsigned long bootColorHoldUntil = 0;
 unsigned long lastModeLedStepAt = 0;
@@ -160,9 +169,50 @@ const unsigned long STABLE_READ_COLOR_HOLD_MS = 1400;
 Preferences preferences;
 WiFiManager wifiManager;
 WebServer server(80);
-NimBLEServer* bleServer = nullptr;
-NimBLECharacteristic* measurementCharacteristic = nullptr;
-NimBLECharacteristic* controlCharacteristic = nullptr;
+BLEServer* bleServer = nullptr;
+BLEHIDDevice* hidDevice = nullptr;
+BLECharacteristic* inputKeyboard = nullptr;
+BLECharacteristic* outputKeyboard = nullptr;
+
+static const uint8_t KEYBOARD_REPORT_MAP[] = {
+  USAGE_PAGE(1), 0x01,
+  USAGE(1), 0x06,
+  COLLECTION(1), 0x01,
+  REPORT_ID(1), KEYBOARD_REPORT_ID,
+  USAGE_PAGE(1), 0x07,
+  USAGE_MINIMUM(1), 0xE0,
+  USAGE_MAXIMUM(1), 0xE7,
+  LOGICAL_MINIMUM(1), 0x00,
+  LOGICAL_MAXIMUM(1), 0x01,
+  REPORT_SIZE(1), 0x01,
+  REPORT_COUNT(1), 0x08,
+  HIDINPUT(1), 0x02,
+  REPORT_COUNT(1), 0x01,
+  REPORT_SIZE(1), 0x08,
+  HIDINPUT(1), 0x01,
+  REPORT_COUNT(1), 0x05,
+  REPORT_SIZE(1), 0x01,
+  USAGE_PAGE(1), 0x08,
+  USAGE_MINIMUM(1), 0x01,
+  USAGE_MAXIMUM(1), 0x05,
+  HIDOUTPUT(1), 0x02,
+  REPORT_COUNT(1), 0x01,
+  REPORT_SIZE(1), 0x03,
+  HIDOUTPUT(1), 0x01,
+  REPORT_COUNT(1), 0x06,
+  REPORT_SIZE(1), 0x08,
+  LOGICAL_MINIMUM(1), 0x00,
+  LOGICAL_MAXIMUM(1), 0x65,
+  USAGE_PAGE(1), 0x07,
+  USAGE_MINIMUM(1), 0x00,
+  USAGE_MAXIMUM(1), 0x65,
+  HIDINPUT(1), 0x00,
+  END_COLLECTION(0)
+};
+
+String buildMeasurementPayload();
+void resetMeasurementState();
+bool isActionButtonPressedRaw();
 
 String buildDeviceSuffix() {
   const uint64_t chipId = ESP.getEfuseMac();
@@ -356,15 +406,135 @@ bool isTriggered() {
     return true;
   }
 
-  return digitalRead(LIFT_SW_PIN) == LOW;
+  return isActionButtonPressedRaw();
 }
 
-bool isLiftSwitchPressedRaw() {
-  return digitalRead(LIFT_SW_PIN) == LOW;
+bool isActionButtonPressedRaw() {
+  return digitalRead(ACTION_BUTTON_PIN) == LOW;
+}
+
+void logActionButtonStateIfChanged() {
+  const bool pressed = isActionButtonPressedRaw();
+  if (pressed == lastActionButtonRawState) {
+    return;
+  }
+
+  lastActionButtonRawState = pressed;
+  Serial.print("[GPIO1] ACTION_BUTTON = ");
+  Serial.println(pressed ? "LOW (pressed)" : "HIGH (released)");
 }
 
 bool isBootButtonPressed() {
   return digitalRead(BOOT_BUTTON_PIN) == LOW;
+}
+
+uint8_t keyCodeForCharacter(char value) {
+  if (value >= '1' && value <= '9') {
+    return static_cast<uint8_t>(0x1E + (value - '1'));
+  }
+
+  if (value == '0') {
+    return 0x27;
+  }
+
+  if (value == '.') {
+    return KEY_CODE_DOT;
+  }
+
+  if (value == '-') {
+    return KEY_CODE_MINUS;
+  }
+
+  if (value == '\n' || value == '\r') {
+    return KEY_CODE_ENTER;
+  }
+
+  return 0x00;
+}
+
+void sendKeyboardReport(uint8_t modifier, uint8_t keyCode) {
+  if (!inputKeyboard || !bleClientConnected) {
+    return;
+  }
+
+  uint8_t report[8] = {
+    modifier,
+    0x00,
+    keyCode,
+    0x00,
+    0x00,
+    0x00,
+    0x00,
+    0x00
+  };
+
+  inputKeyboard->setValue(report, sizeof(report));
+  inputKeyboard->notify();
+  delay(HID_KEY_PRESS_MS);
+
+  uint8_t releaseReport[8] = { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
+  inputKeyboard->setValue(releaseReport, sizeof(releaseReport));
+  inputKeyboard->notify();
+  delay(HID_KEY_RELEASE_MS);
+}
+
+bool typeKeyboardText(const String& text, bool appendEnter) {
+  if (!bleClientConnected || !inputKeyboard) {
+    return false;
+  }
+
+  for (size_t index = 0; index < text.length(); index++) {
+    const uint8_t keyCode = keyCodeForCharacter(text[index]);
+    if (keyCode == 0x00) {
+      continue;
+    }
+
+    sendKeyboardReport(KEY_MOD_NONE, keyCode);
+  }
+
+  if (appendEnter) {
+    sendKeyboardReport(KEY_MOD_NONE, KEY_CODE_ENTER);
+  }
+
+  delay(HID_TYPE_GUARD_MS);
+  return true;
+}
+
+void startKeyboardMeasurementCycle(const char* reason) {
+  if (hidSendArmed) {
+    Serial.println("[HID] measurement cycle already running");
+    return;
+  }
+
+  hidSendArmed = true;
+  hidTypedDuringCurrentCycle = false;
+  lastKeyboardTypedValue = "";
+  resetMeasurementState();
+  measurementPayload = buildMeasurementPayload();
+  bleStatusMessage = bleClientConnected ? "measuring_for_send" : "waiting_for_host";
+  Serial.print("[HID] cycle started by ");
+  Serial.println(reason);
+}
+
+void updateActionButton() {
+  const bool pressed = isActionButtonPressedRaw();
+
+  if (pressed && !lastBootButtonReading) {
+    bootButtonPressedAt = millis();
+    if (activeMode == RUNTIME_MODE_BLE) {
+      startKeyboardMeasurementCycle("button_press");
+    }
+  }
+
+  if (pressed && lastBootButtonReading) {
+    const unsigned long pressedDuration = millis() - bootButtonPressedAt;
+    if (pressedDuration < SEND_ARM_DEBOUNCE_MS) {
+      lastBootButtonReading = pressed;
+      return;
+    }
+  }
+
+  lastBootButtonReading = pressed;
 }
 
 float readBatteryVoltage() {
@@ -436,7 +606,7 @@ void updateMeasurementLedState(bool triggered, bool stable) {
     return;
   }
 
-  if (useLiftSwitch && isLiftSwitchPressedRaw()) {
+  if (useLiftSwitch && isActionButtonPressedRaw()) {
     setRgbColor(CRGB::Red);
     applyLedState(true);
     return;
@@ -960,328 +1130,90 @@ void configModeCallback(WiFiManager* wm) {
   Serial.println(WiFi.softAPIP());
 }
 
-class BleServerCallbacks : public NimBLEServerCallbacks {
-  void onConnect(NimBLEServer* server, ble_gap_conn_desc* desc) override {
+class BleKeyboardServerCallbacks : public BLEServerCallbacks {
+  void onConnect(BLEServer* server) override {
     (void)server;
     bleClientConnected = true;
-    bleStatusMessage = "connected";
-    Serial.print("[BLE] client connected: ");
-    if (desc) {
-      NimBLEAddress address(desc->peer_ota_addr);
-      Serial.println(address.toString().c_str());
-    } else {
-      Serial.println("unknown");
-    }
+    bleStatusMessage = "keyboard_connected";
+    Serial.println("[BLE HID] host connected");
     updateMeasurementLedState(isTriggered(), isStable);
   }
 
-  void onDisconnect(NimBLEServer* server, ble_gap_conn_desc* desc) override {
+  void onDisconnect(BLEServer* server) override {
     (void)server;
     bleClientConnected = false;
-    bleStatusMessage = "advertising";
-    Serial.print("[BLE] client disconnected: ");
-    if (desc) {
-      NimBLEAddress address(desc->peer_ota_addr);
-      Serial.println(address.toString().c_str());
-    } else {
-      Serial.println("unknown");
-    }
-    NimBLEDevice::startAdvertising();
+    bleStatusMessage = "keyboard_advertising";
+    hidSendArmed = false;
+    hidTypedDuringCurrentCycle = false;
+    lastKeyboardTypedValue = "";
+    Serial.println("[BLE HID] host disconnected");
+    BLEDevice::startAdvertising();
     updateMeasurementLedState(isTriggered(), isStable);
-  }
-};
-
-class BleControlCallbacks : public NimBLECharacteristicCallbacks {
-  void onWrite(NimBLECharacteristic* characteristic) override {
-    std::string value = characteristic->getValue();
-    String command = String(value.c_str());
-    command.trim();
-    command.toLowerCase();
-
-    if (command == "mode:wifi") {
-      lastBleControlMessage = "switching_to_wifi";
-      characteristic->setValue(lastBleControlMessage.c_str());
-      rebootToMode(RUNTIME_MODE_WIFI, "ble");
-      return;
-    }
-
-    if (command == "mode:ble") {
-      lastBleControlMessage = "already_in_ble";
-      characteristic->setValue(lastBleControlMessage.c_str());
-      return;
-    }
-
-    if (command == "reboot") {
-      lastBleControlMessage = "rebooting";
-      characteristic->setValue(lastBleControlMessage.c_str());
-      Serial.println("[BLE] reboot requested");
-      delay(200);
-      ESP.restart();
-      return;
-    }
-
-    if (command == "status") {
-      lastBleControlMessage = buildStatusPayload();
-      characteristic->setValue(lastBleControlMessage.c_str());
-      return;
-    }
-
-    if (command.startsWith("ratio:")) {
-      const float nextRatio = command.substring(6).toFloat();
-      if (!isDividerRatioValid(nextRatio)) {
-        lastBleControlMessage = "invalid_ratio";
-        characteristic->setValue(lastBleControlMessage.c_str());
-        return;
-      }
-
-      saveDividerRatio(nextRatio);
-      resetMeasurementState();
-      measurementPayload = buildMeasurementPayload();
-      lastBleControlMessage = String("{\"ok\":true,\"divider_ratio\":") + String(dividerRatio, 3) + "}";
-      characteristic->setValue(lastBleControlMessage.c_str());
-      Serial.print("[CAL] divider ratio updated via ble: ");
-      Serial.println(dividerRatio, 3);
-      return;
-    }
-
-    if (command.startsWith("adc_gain:")) {
-      const float nextGain = command.substring(9).toFloat();
-      if (!isAdcGainValid(nextGain)) {
-        lastBleControlMessage = "invalid_adc_gain";
-        characteristic->setValue(lastBleControlMessage.c_str());
-        return;
-      }
-
-      saveAdcCalibration(nextGain, adcOffset);
-      resetMeasurementState();
-      measurementPayload = buildMeasurementPayload();
-      lastBleControlMessage = String("{\"ok\":true,\"adc_gain\":") + String(adcGain, 4) + "}";
-      characteristic->setValue(lastBleControlMessage.c_str());
-      Serial.print("[CAL] adc gain updated via ble: ");
-      Serial.println(adcGain, 4);
-      return;
-    }
-
-    if (command.startsWith("adc_offset:")) {
-      const float nextOffset = command.substring(11).toFloat();
-      if (!isAdcOffsetValid(nextOffset)) {
-        lastBleControlMessage = "invalid_adc_offset";
-        characteristic->setValue(lastBleControlMessage.c_str());
-        return;
-      }
-
-      saveAdcCalibration(adcGain, nextOffset);
-      resetMeasurementState();
-      measurementPayload = buildMeasurementPayload();
-      lastBleControlMessage = String("{\"ok\":true,\"adc_offset\":") + String(adcOffset, 4) + "}";
-      characteristic->setValue(lastBleControlMessage.c_str());
-      Serial.print("[CAL] adc offset updated via ble: ");
-      Serial.println(adcOffset, 4);
-      return;
-    }
-
-    if (command.startsWith("autocal:")) {
-      String payload = command.substring(8);
-      String adcText = "";
-      String batteryText = "";
-      String samplesText = "";
-
-      const int firstComma = payload.indexOf(',');
-      const int secondComma = firstComma >= 0 ? payload.indexOf(',', firstComma + 1) : -1;
-
-      if (firstComma >= 0) {
-        adcText = payload.substring(0, firstComma);
-        if (secondComma >= 0) {
-          batteryText = payload.substring(firstComma + 1, secondComma);
-          samplesText = payload.substring(secondComma + 1);
-        } else {
-          batteryText = payload.substring(firstComma + 1);
-        }
-      } else {
-        batteryText = payload;
-      }
-
-      adcText.trim();
-      batteryText.trim();
-      samplesText.trim();
-
-      const bool hasActualAdc = !adcText.isEmpty();
-      const bool hasActualBattery = !batteryText.isEmpty();
-      const float actualAdc = hasActualAdc ? adcText.toFloat() : 0.0f;
-      const float actualBattery = hasActualBattery ? batteryText.toFloat() : 0.0f;
-      const int sampleCount = sanitizeAutoCalSamples(samplesText.isEmpty() ? DEFAULT_AUTO_CAL_SAMPLES : samplesText.toInt());
-
-      if ((!hasActualAdc && !hasActualBattery) || (hasActualAdc && actualAdc <= 0.0f) || (hasActualBattery && actualBattery <= 0.0f)) {
-        lastBleControlMessage = "invalid_autocal_reference";
-        characteristic->setValue(lastBleControlMessage.c_str());
-        return;
-      }
-
-      int rawAverage = 0;
-      int milliVoltsAverage = 0;
-      float rawVoltageAverage = 0.0f;
-      float adcVoltageAverage = 0.0f;
-      sampleAdcAverages(sampleCount, rawAverage, milliVoltsAverage, rawVoltageAverage, adcVoltageAverage);
-
-      if (adcVoltageAverage <= 0.0f) {
-        lastBleControlMessage = "adc_sample_failed";
-        characteristic->setValue(lastBleControlMessage.c_str());
-        return;
-      }
-
-      float nextGain = adcGain;
-      float nextOffset = adcOffset;
-      float nextDividerRatio = dividerRatio;
-
-      if (hasActualAdc) {
-        nextGain = (actualAdc - adcOffset) / adcVoltageAverage;
-      }
-
-      const float correctedAdcVoltage = (adcVoltageAverage * nextGain) + nextOffset;
-      if (correctedAdcVoltage <= 0.0f) {
-        lastBleControlMessage = "invalid_corrected_adc";
-        characteristic->setValue(lastBleControlMessage.c_str());
-        return;
-      }
-
-      if (hasActualBattery) {
-        nextDividerRatio = (actualBattery - VOLTAGE_OFFSET) / correctedAdcVoltage;
-      }
-
-      if (!isAdcGainValid(nextGain) || !isAdcOffsetValid(nextOffset) || !isDividerRatioValid(nextDividerRatio)) {
-        lastBleControlMessage = "auto_calculation_out_of_range";
-        characteristic->setValue(lastBleControlMessage.c_str());
-        return;
-      }
-
-      saveAdcCalibration(nextGain, nextOffset);
-      saveDividerRatio(nextDividerRatio);
-      resetMeasurementState();
-      measurementPayload = buildMeasurementPayload();
-
-      lastBleControlMessage =
-        String("{\"ok\":true,\"samples\":") + String(sampleCount) +
-        ",\"adc_gain\":" + String(adcGain, 4) +
-        ",\"adc_offset\":" + String(adcOffset, 4) +
-        ",\"divider_ratio\":" + String(dividerRatio, 4) + "}";
-      characteristic->setValue(lastBleControlMessage.c_str());
-
-      Serial.println("[AUTO-CAL] completed via ble");
-      Serial.print("  samples: ");
-      Serial.println(sampleCount);
-      Serial.print("  sample raw avg: ");
-      Serial.println(rawAverage);
-      Serial.print("  sample adc mv avg: ");
-      Serial.println(milliVoltsAverage);
-      Serial.print("  sample adc voltage avg: ");
-      Serial.println(adcVoltageAverage, 4);
-      Serial.print("  sample adc corrected: ");
-      Serial.println(correctedAdcVoltage, 4);
-      if (hasActualAdc) {
-        Serial.print("  actual adc ref: ");
-        Serial.println(actualAdc, 4);
-      }
-      if (hasActualBattery) {
-        Serial.print("  actual battery ref: ");
-        Serial.println(actualBattery, 4);
-      }
-      Serial.print("  saved adc gain: ");
-      Serial.println(adcGain, 4);
-      Serial.print("  saved adc offset: ");
-      Serial.println(adcOffset, 4);
-      Serial.print("  saved divider ratio: ");
-      Serial.println(dividerRatio, 4);
-      return;
-    }
-
-    lastBleControlMessage = "unknown_command";
-    characteristic->setValue(lastBleControlMessage.c_str());
   }
 };
 
 void setupBle() {
-  bleStatusMessage = "starting";
-  NimBLEDevice::init(bleDeviceName.c_str());
-  NimBLEDevice::setPower(ESP_PWR_LVL_P9);
+  bleStatusMessage = "keyboard_starting";
+  BLEDevice::init(bleDeviceName.c_str());
+  BLEDevice::setPower(ESP_PWR_LVL_P9);
 
-  bleServer = NimBLEDevice::createServer();
-  bleServer->setCallbacks(new BleServerCallbacks());
+  bleServer = BLEDevice::createServer();
+  bleServer->setCallbacks(new BleKeyboardServerCallbacks());
 
-  NimBLEService* service = bleServer->createService(MEASUREMENT_SERVICE_UUID);
-  measurementCharacteristic = service->createCharacteristic(
-    MEASUREMENT_CHARACTERISTIC_UUID,
-    NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY,
-    MEASUREMENT_CHARACTERISTIC_MAX_LEN
-  );
-  controlCharacteristic = service->createCharacteristic(
-    CONTROL_CHARACTERISTIC_UUID,
-    NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR,
-    CONTROL_CHARACTERISTIC_MAX_LEN
-  );
-  controlCharacteristic->setCallbacks(new BleControlCallbacks());
+  hidDevice = new BLEHIDDevice(bleServer);
+  inputKeyboard = hidDevice->inputReport(KEYBOARD_REPORT_ID);
+  outputKeyboard = hidDevice->outputReport(KEYBOARD_REPORT_ID);
+  (void)outputKeyboard;
 
-  measurementPayload = buildMeasurementPayload();
-  measurementCharacteristic->setValue(measurementPayload);
-  controlCharacteristic->setValue(lastBleControlMessage.c_str());
+  hidDevice->manufacturer()->setValue("PUMA Battery");
+  hidDevice->pnp(0x02, 0x1234, 0xB001, 0x0100);
+  hidDevice->hidInfo(0x00, 0x01);
+  hidDevice->reportMap(const_cast<uint8_t*>(KEYBOARD_REPORT_MAP), sizeof(KEYBOARD_REPORT_MAP));
+  hidDevice->startServices();
+  hidDevice->setBatteryLevel(100);
 
-  service->start();
+  BLESecurity* security = new BLESecurity();
+  security->setAuthenticationMode(ESP_LE_AUTH_BOND);
+  security->setCapability(ESP_IO_CAP_NONE);
+  security->setInitEncryptionKey(ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK);
+  security->setRespEncryptionKey(ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK);
+  security->setKeySize();
 
-  NimBLEAdvertising* advertising = NimBLEDevice::getAdvertising();
-  NimBLEAdvertisementData advertisingData;
-  NimBLEAdvertisementData scanResponseData;
-
-  advertisingData.setFlags(0x06);
-  advertisingData.setCompleteServices(NimBLEUUID(MEASUREMENT_SERVICE_UUID));
-  scanResponseData.setName(bleDeviceName.c_str());
-
-  advertising->setAdvertisementData(advertisingData);
-  advertising->setScanResponseData(scanResponseData);
+  BLEAdvertising* advertising = BLEDevice::getAdvertising();
+  advertising->setAppearance(HID_KEYBOARD);
+  advertising->addServiceUUID(hidDevice->hidService()->getUUID());
   advertising->start();
 
-  bleStatusMessage = "advertising";
-  Serial.println("[BLE] advertising started");
-  Serial.print("[BLE] Device name: ");
+  bleStatusMessage = "keyboard_advertising";
+  Serial.println("[BLE HID] keyboard advertising started");
+  Serial.print("[BLE HID] Device name: ");
   Serial.println(bleDeviceName);
-  Serial.print("[BLE] Device id: ");
+  Serial.print("[BLE HID] Device id: ");
   Serial.println(deviceId);
-  Serial.print("[BLE] Service UUID: ");
-  Serial.println(MEASUREMENT_SERVICE_UUID);
-  Serial.print("[BLE] Measurement UUID: ");
-  Serial.println(MEASUREMENT_CHARACTERISTIC_UUID);
-  Serial.print("[BLE] Control UUID: ");
-  Serial.println(CONTROL_CHARACTERISTIC_UUID);
 }
 
-void updateBleCharacteristic() {
-  if (activeMode != RUNTIME_MODE_BLE || !measurementCharacteristic) {
+void updateBleKeyboard() {
+  if (activeMode != RUNTIME_MODE_BLE) {
     return;
   }
 
-  if (measurementPayload.isEmpty()) {
-    measurementPayload = buildMeasurementPayload();
-  }
-
-  measurementCharacteristic->setValue(measurementPayload);
-
-  if (!controlCharacteristic) {
+  if (!hidSendArmed || !bleClientConnected || !isStable || hidTypedDuringCurrentCycle) {
     return;
   }
 
-  controlCharacteristic->setValue(lastBleControlMessage.c_str());
-
-  if (!bleClientConnected) {
+  const String typedValue = String(lastAverageVoltage, 3);
+  if (!typeKeyboardText(typedValue, true)) {
+    bleStatusMessage = "keyboard_send_failed";
     return;
   }
 
-  const bool changed = measurementPayload != lastNotifiedPayload;
-  const bool intervalElapsed = millis() - lastNotifyAt >= BLE_NOTIFY_INTERVAL_MS;
-  if (!changed && !intervalElapsed) {
-    return;
-  }
-
-  measurementCharacteristic->notify();
-  lastNotifiedPayload = measurementPayload;
-  lastNotifyAt = millis();
+  hidTypedDuringCurrentCycle = true;
+  hidSendArmed = false;
+  lastKeyboardTypedValue = typedValue;
+  bleStatusMessage = "keyboard_value_typed";
+  stableReadHoldUntil = millis() + STABLE_READ_COLOR_HOLD_MS;
+  Serial.print("[BLE HID] typed voltage: ");
+  Serial.println(typedValue);
 }
 
 void setupAdc() {
@@ -1323,8 +1255,8 @@ void printBootInfo() {
   Serial.println(STATUS_LED_PIN);
   Serial.print("[BOOT] BOOT_BUTTON_PIN = ");
   Serial.println(BOOT_BUTTON_PIN);
-  Serial.print("[BOOT] LIFT_SW_PIN = ");
-  Serial.println(LIFT_SW_PIN);
+  Serial.print("[BOOT] ACTION_BUTTON_PIN = ");
+  Serial.println(ACTION_BUTTON_PIN);
   Serial.print("[BOOT] USE_LIFT_SWITCH = ");
   Serial.println(useLiftSwitch ? "true" : "false");
   Serial.print("[BOOT] USE_ONBOARD_LED = ");
@@ -1457,6 +1389,10 @@ void printMeasurementStatus() {
   Serial.println(sampledAtMs);
   Serial.print("    liftSwitchEnabled: ");
   Serial.println(useLiftSwitch ? "true" : "false");
+  Serial.print("    gpio1Raw: ");
+  Serial.println(digitalRead(ACTION_BUTTON_PIN));
+  Serial.print("    gpio1Pressed: ");
+  Serial.println(isActionButtonPressedRaw() ? "true" : "false");
   Serial.print("    mockVoltageEnabled: ");
   Serial.println(useMockVoltage ? "true" : "false");
 }
@@ -1491,7 +1427,7 @@ void printWifiInfo() {
 }
 
 void printBleInfo() {
-  Serial.println("[INFO] BLE");
+  Serial.println("[INFO] BLE HID");
   Serial.print("  activeMode: ");
   Serial.println(runtimeModeName(activeMode));
   Serial.print("  status: ");
@@ -1500,12 +1436,15 @@ void printBleInfo() {
   Serial.println(bleClientConnected ? "true" : "false");
   Serial.print("  name: ");
   Serial.println(bleDeviceName);
-  Serial.print("  serviceUuid: ");
-  Serial.println(MEASUREMENT_SERVICE_UUID);
-  Serial.print("  measurementUuid: ");
-  Serial.println(MEASUREMENT_CHARACTERISTIC_UUID);
-  Serial.print("  controlUuid: ");
-  Serial.println(CONTROL_CHARACTERISTIC_UUID);
+  Serial.print("  profile: ");
+  Serial.println("hid_keyboard");
+  Serial.print("  armed: ");
+  Serial.println(hidSendArmed ? "true" : "false");
+  Serial.print("  typedThisCycle: ");
+  Serial.println(hidTypedDuringCurrentCycle ? "true" : "false");
+  Serial.print("  lastTypedValue: ");
+  Serial.println(lastKeyboardTypedValue);
+  Serial.println("  action: press A1 once to measure, type voltage, and send Enter");
 }
 
 void printHelp() {
@@ -1860,7 +1799,8 @@ void setup() {
   pinMode(BOOT_BUTTON_PIN, INPUT_PULLUP);
   checkBootButtonModeOverride();
   printBootInfo();
-  pinMode(LIFT_SW_PIN, INPUT_PULLUP);
+  pinMode(ACTION_BUTTON_PIN, INPUT);
+  lastActionButtonRawState = isActionButtonPressedRaw();
 
   setupAdc();
   setupStatusIndicators();
@@ -1908,6 +1848,7 @@ void loop() {
 
   updateModeLedPattern();
   handleSerialInput();
+  logActionButtonStateIfChanged();
 
   updateRgbTest();
   updateMeasurement();
@@ -1921,7 +1862,8 @@ void loop() {
   }
 
   if (activeMode == RUNTIME_MODE_BLE) {
-    updateBleCharacteristic();
+    updateActionButton();
+    updateBleKeyboard();
   }
 
   logMeasurementDebug();

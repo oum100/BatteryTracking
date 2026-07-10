@@ -371,7 +371,7 @@ async function focusActiveModalField() {
     return
   }
 
-  const activeMode = workflowActionMode.value ?? (phase.value ? getDefaultWorkflowActionMode(phase.value) : 'battery')
+  const activeMode = phase.value === 'BEFORE_CHARGE' ? 'battery' : 'voltage'
 
   if (activeMode === 'battery') {
     batteryInputRef.value?.focus()
@@ -741,6 +741,81 @@ function getSlotVoltageLabel(slot: BatteryJobSlot, targetPhase: JobPhase) {
   return value === null ? '-' : `${value.toFixed(3)} V`
 }
 
+function getSlotActiveMetric(targetPhase: JobPhase | null) {
+  if (targetPhase === 'AFTER_CHARGE') {
+    return 'after' as const
+  }
+
+  if (targetPhase === 'DELIVERY') {
+    return 'delivery' as const
+  }
+
+  return 'before' as const
+}
+
+function formatSlotCardVoltage(value: number | null) {
+  return value === null ? null : value.toFixed(2)
+}
+
+function getSlotCardUi(slot: BatteryJobSlot) {
+  const targetPhase = phase.value ?? 'BEFORE_CHARGE'
+  const isSelected = selectedSlotNumber.value === slot.slotNumber
+  const isDone = getPhaseVoltage(slot, targetPhase) !== null
+
+  if (isSelected) {
+    if (targetPhase === 'AFTER_CHARGE') {
+      return {
+        titleClass: 'bg-sky-700 text-white',
+        bodyClass: 'bg-sky-50 text-sky-950',
+        borderClass: 'border-sky-700',
+        statusLabel: 'HERE',
+        statusClass: 'bg-white/20 text-white',
+        activeMetricClass: 'bg-sky-700 text-white',
+      }
+    }
+
+    if (targetPhase === 'DELIVERY') {
+      return {
+        titleClass: 'bg-amber-600 text-white',
+        bodyClass: 'bg-amber-50 text-amber-950',
+        borderClass: 'border-amber-600',
+        statusLabel: 'HERE',
+        statusClass: 'bg-white/20 text-white',
+        activeMetricClass: 'bg-amber-600 text-white',
+      }
+    }
+
+    return {
+      titleClass: 'bg-emerald-800 text-white',
+      bodyClass: 'bg-emerald-50 text-emerald-950',
+      borderClass: 'border-emerald-800',
+      statusLabel: 'HERE',
+      statusClass: 'bg-white/20 text-white',
+      activeMetricClass: 'bg-emerald-800 text-white',
+    }
+  }
+
+  if (isDone) {
+    return {
+      titleClass: 'bg-slate-500 text-white',
+      bodyClass: 'bg-slate-100 text-slate-900',
+      borderClass: 'border-slate-400',
+      statusLabel: 'DONE',
+      statusClass: 'bg-white/20 text-white',
+      activeMetricClass: 'bg-slate-500 text-white',
+    }
+  }
+
+  return {
+    titleClass: 'bg-slate-300 text-slate-800',
+    bodyClass: 'bg-white text-slate-900',
+    borderClass: 'border-slate-200',
+    statusLabel: 'WAIT',
+    statusClass: 'bg-slate-100 text-slate-700',
+    activeMetricClass: 'bg-slate-300 text-slate-800',
+  }
+}
+
 function normalizeJob(job: any): BatteryJobRecord {
   return {
     id: String(job.id),
@@ -827,6 +902,7 @@ function selectSlot(slotNumber: number) {
     return
   }
 
+  workflowActionMode.value = null
   editingSlotNumber.value = slotNumber
   syncModalSlotInputs()
   detailModalOpen.value = true
@@ -1344,14 +1420,14 @@ onBeforeUnmount(() => {
       >
         <div class="grid items-center gap-4 lg:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]">
           <div>
-            <div class="text-sm text-white/80">MF Auto Workspace</div>
-            <h1 class="mt-2 text-4xl font-black tracking-tight text-white">
+            <div class="text-xs text-white/80 sm:text-sm">MF Auto Workspace</div>
+            <h1 class="mt-2 text-[2.1rem] font-black leading-none tracking-tight text-white sm:text-4xl">
               Battery QC System
             </h1>
           </div>
 
           <div class="flex justify-center lg:justify-self-center">
-            <img src="/branding/logo-puma-battery.png" alt="PUMA Battery" class="h-24 w-auto object-contain" />
+            <img src="/branding/logo-puma-battery.png" alt="PUMA Battery" class="h-16 w-auto object-contain sm:h-24" />
           </div>
 
           <div />
@@ -1364,7 +1440,7 @@ onBeforeUnmount(() => {
             v-for="option in phaseOptions"
             :key="option.value"
             type="button"
-            class="min-h-[220px] border-2 px-8 py-8 text-left shadow-[0_24px_60px_rgba(15,23,42,0.12)] transition-all duration-200 hover:-translate-y-1 hover:shadow-[0_30px_70px_rgba(15,23,42,0.16)] active:translate-y-0"
+            class="min-h-[180px] border-2 px-6 py-6 text-left shadow-[0_24px_60px_rgba(15,23,42,0.12)] transition-all duration-200 hover:-translate-y-1 hover:shadow-[0_30px_70px_rgba(15,23,42,0.16)] active:translate-y-0 sm:min-h-[220px] sm:px-8 sm:py-8"
             :class="[
               option.value === 'BEFORE_CHARGE'
                 ? 'border-lime-500 bg-[linear-gradient(180deg,_#f4ffe7_0%,_#e5f7cf_100%)] text-lime-950'
@@ -1375,16 +1451,16 @@ onBeforeUnmount(() => {
             ]"
             @click="selectPhase(option.value)"
           >
-            <div class="flex items-start justify-between gap-6">
-              <div class="text-sm font-black uppercase tracking-[0.22em] opacity-70">Select Mode</div>
+            <div class="flex items-start justify-between gap-4 sm:gap-6">
+              <div class="text-xs font-black uppercase tracking-[0.18em] opacity-70 sm:text-sm sm:tracking-[0.22em]">Select Mode</div>
               <div
-                class="flex h-20 w-20 shrink-0 items-center justify-center rounded-xl border border-current/15 bg-white/55 shadow-[0_12px_24px_rgba(15,23,42,0.08)]"
+                class="flex h-16 w-16 shrink-0 items-center justify-center rounded-xl border border-current/15 bg-white/55 shadow-[0_12px_24px_rgba(15,23,42,0.08)] sm:h-20 sm:w-20"
               >
-                <UIcon :name="option.icon" class="size-11" />
+                <UIcon :name="option.icon" class="size-9 sm:size-11" />
               </div>
             </div>
-            <div class="mt-6 text-[2.15rem] font-black leading-tight tracking-[-0.03em]">{{ option.label }}</div>
-            <div class="mt-4 text-base font-semibold opacity-90">{{ option.detail }}</div>
+            <div class="mt-5 text-[1.4rem] font-black leading-tight tracking-[-0.03em] sm:mt-6 sm:text-[2.15rem]">{{ option.label }}</div>
+            <div class="mt-3 text-sm font-semibold opacity-90 sm:mt-4 sm:text-base">{{ option.detail }}</div>
           </button>
         </div>
       </div>
@@ -1398,27 +1474,21 @@ onBeforeUnmount(() => {
             ? 'border-sky-500 bg-[linear-gradient(180deg,_#1874b8_0%,_#0ea5e9_100%)] text-white'
             : 'border-amber-600 bg-[linear-gradient(180deg,_#d97706_0%,_#f59e0b_100%)] text-white'"
       >
-        <div class="grid items-center gap-6 px-7 py-5 lg:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]">
-          <div class="flex items-center gap-5">
+        <div class="grid items-center gap-4 px-5 py-4 lg:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] lg:px-6 lg:py-4">
+          <div class="flex items-center gap-4">
             <div
-              class="flex h-16 w-16 items-center justify-center rounded-xl bg-white/18 ring-1 ring-white/20"
+              class="flex h-12 w-12 items-center justify-center rounded-xl bg-white/18 ring-1 ring-white/20 lg:h-14 lg:w-14"
             >
               <UIcon
                 :name="currentPhaseMeta?.icon ?? 'i-lucide-battery'"
-                class="size-8"
+                class="size-6 lg:size-7"
                 :class="phase === 'DELIVERY' ? 'text-white' : 'text-white'"
               />
             </div>
             <div>
+              <div class="text-[1.55rem] font-black leading-none lg:text-[1.8rem]">{{ currentPhaseMeta?.label }}</div>
               <div
-                class="text-xs font-black uppercase tracking-[0.24em]"
-                :class="phase === 'DELIVERY' ? 'text-white/75' : 'text-white/75'"
-              >
-                Current QC Mode
-              </div>
-              <div class="mt-1 text-[2rem] font-black leading-none">{{ currentPhaseMeta?.label }}</div>
-              <div
-                class="mt-1 text-sm font-semibold"
+                class="mt-1 text-xs font-semibold lg:text-sm"
                 :class="phase === 'DELIVERY' ? 'text-white/85' : 'text-white/85'"
               >
                 {{ currentPhaseMeta?.detail }}
@@ -1427,14 +1497,14 @@ onBeforeUnmount(() => {
           </div>
 
           <div class="flex justify-center lg:justify-self-center">
-            <img src="/branding/logo-puma-battery.png" alt="PUMA Battery" class="h-20 w-auto object-contain" />
+            <img src="/branding/logo-puma-battery.png" alt="PUMA Battery" class="h-14 w-auto object-contain lg:h-16" />
           </div>
 
           <div class="flex items-center justify-end">
             <UButton
               color="neutral"
               variant="solid"
-              class="rounded-xl px-5 py-3 text-sm font-black"
+              class="rounded-xl px-4 py-2.5 text-sm font-black"
               :class="phase === 'DELIVERY'
                 ? 'border border-white/35 bg-white/12 text-white hover:bg-white/20 active:bg-white/25'
                 : 'border border-white/30 bg-white/12 text-white hover:bg-white/20 active:bg-white/25'"
@@ -1622,40 +1692,25 @@ onBeforeUnmount(() => {
                 v-for="slot in row"
                 :key="slot.slotNumber"
                 type="button"
-                class="rounded-[5px] border p-3 text-left transition-all duration-150"
-                :class="[
-                  selectedSlotNumber === slot.slotNumber
-                    ? `${activeSlotCardClass} shadow-[0_16px_30px_rgba(15,23,42,0.12)]`
-                    : slot.slotNumber === firstIncompleteSlotNumber
-                      ? 'border-slate-300 bg-slate-50 text-slate-950'
-                      : 'border-slate-200 bg-white text-slate-950 hover:bg-slate-50',
-                ]"
+                class="block w-full text-left transition-all duration-150 hover:-translate-y-0.5"
                 @click="selectSlot(slot.slotNumber)"
               >
-                <div class="flex items-center justify-between gap-2">
-                  <div class="text-xs font-bold uppercase tracking-[0.18em]" :class="selectedSlotNumber === slot.slotNumber ? 'text-current/75' : 'text-slate-500'">
-                    Slot {{ slot.slotNumber }}
-                  </div>
-                  <div class="rounded-full px-2 py-1 text-[10px] font-bold" :class="selectedSlotNumber === slot.slotNumber ? 'bg-white/70 text-current' : 'bg-slate-100 text-slate-700'">
-                    {{
-                      getPhaseVoltage(slot, phase) !== null
-                        ? 'DONE'
-                        : selectedSlotNumber === slot.slotNumber
-                          ? 'ACTIVE'
-                          : slot.slotNumber === firstIncompleteSlotNumber
-                            ? 'NEXT'
-                            : 'WAIT'
-                    }}
-                  </div>
-                </div>
-                <div class="mt-2 truncate text-sm font-bold">
-                  Batt ID: {{ slot.batteryId || '-' }}
-                </div>
-                <div class="mt-2 space-y-1 text-xs">
-                  <div>Before: {{ slot.beforeVoltage !== null ? `${slot.beforeVoltage.toFixed(3)} V` : '-' }}</div>
-                  <div>After: {{ slot.afterVoltage !== null ? `${slot.afterVoltage.toFixed(3)} V` : '-' }}</div>
-                  <div>Delivery: {{ slot.deliveryVoltage !== null ? `${slot.deliveryVoltage.toFixed(3)} V` : '-' }}</div>
-                </div>
+                <BatteryQcSlotCard
+                  size="compact"
+                  :slot-id="slot.slotNumber"
+                  :batt-id="slot.batteryId || '-'"
+                  :volt-b="formatSlotCardVoltage(slot.beforeVoltage)"
+                  :volt-a="formatSlotCardVoltage(slot.afterVoltage)"
+                  :volt-d="formatSlotCardVoltage(slot.deliveryVoltage)"
+                  header-icon="ph:car-battery"
+                  :title-class="getSlotCardUi(slot).titleClass"
+                  :body-class="getSlotCardUi(slot).bodyClass"
+                  :border-class="getSlotCardUi(slot).borderClass"
+                  :status-label="getSlotCardUi(slot).statusLabel"
+                  :status-class="getSlotCardUi(slot).statusClass"
+                  :active-metric="getSlotActiveMetric(phase)"
+                  :active-metric-class="getSlotCardUi(slot).activeMetricClass"
+                />
               </button>
             </div>
           </div>
