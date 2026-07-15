@@ -20,10 +20,16 @@ enum BatteryJobPhase {
 }
 
 enum BatteryJobStatus {
-  OPEN
-  BEFORE_CHARGE_COMPLETED
-  AFTER_CHARGE_COMPLETED
-  READY_FOR_DELIVERY
+  NEW_JOB
+  BEFORE_CHARGING
+  AFTER_CHARGING
+  QC_FOR_DELIVERY
+  SHIPPED
+}
+
+enum ShipToFactory {
+  AAT
+  FTM
 }
 
 model Battery {
@@ -65,13 +71,16 @@ model BatteryMovement {
 }
 
 model Employee {
-  id        String       @id @default(cuid())
-  code      String       @unique
-  name      String
-  active    Boolean      @default(true)
-  jobs      BatteryJob[]
-  createdAt DateTime     @default(now())
-  updatedAt DateTime     @updatedAt
+  id                      String       @id @default(cuid())
+  code                    String       @unique
+  name                    String
+  active                  Boolean      @default(true)
+  jobs                    BatteryJob[]
+  beforeChargeJobs        BatteryJob[] @relation("BeforeChargeOperator")
+  afterChargeJobs         BatteryJob[] @relation("AfterChargeOperator")
+  beforeDeliveryJobs      BatteryJob[] @relation("BeforeDeliveryOperator")
+  createdAt               DateTime     @default(now())
+  updatedAt               DateTime     @updatedAt
 
   @@index([active, name])
 }
@@ -128,12 +137,19 @@ model ChargeProgram {
 
 model BatteryJob {
   id                       String            @id @default(cuid())
+  batchId                  String?
   phase                    BatteryJobPhase   @default(BEFORE_CHARGE)
-  status                   BatteryJobStatus  @default(OPEN)
+  status                   BatteryJobStatus  @default(NEW_JOB)
   rackId                   String
   openedAt                 DateTime
   operatorId               String?
   operator                 Employee?         @relation(fields: [operatorId], references: [id], onDelete: SetNull)
+  beforeChargeOperatorId   String?
+  beforeChargeOperator     Employee?         @relation("BeforeChargeOperator", fields: [beforeChargeOperatorId], references: [id], onDelete: SetNull)
+  afterChargeOperatorId    String?
+  afterChargeOperator      Employee?         @relation("AfterChargeOperator", fields: [afterChargeOperatorId], references: [id], onDelete: SetNull)
+  beforeDeliveryOperatorId String?
+  beforeDeliveryOperator   Employee?         @relation("BeforeDeliveryOperator", fields: [beforeDeliveryOperatorId], references: [id], onDelete: SetNull)
   salesOrderId             String?
   salesOrder               SalesOrder?       @relation(fields: [salesOrderId], references: [id], onDelete: SetNull)
   invoiceId                String?
@@ -142,6 +158,8 @@ model BatteryJob {
   chargeChannel            ChargeChannel?    @relation(fields: [chargeChannelId], references: [id], onDelete: SetNull)
   chargeProgramId          String?
   chargeProgram            ChargeProgram?    @relation(fields: [chargeProgramId], references: [id], onDelete: SetNull)
+  plannedDeliveryDate      DateTime?
+  shipTo                   ShipToFactory?
   beforeChargeCompletedAt  DateTime?
   afterChargeCompletedAt   DateTime?
   deliveryCompletedAt      DateTime?
@@ -151,9 +169,12 @@ model BatteryJob {
   createdAt                DateTime          @default(now())
   updatedAt                DateTime          @updatedAt
 
+  @@index([batchId, createdAt])
   @@index([rackId, createdAt])
   @@index([rackId, status, createdAt])
   @@index([status, phase, createdAt])
+  @@index([plannedDeliveryDate])
+  @@index([shipTo])
 }
 
 model BatteryJobSlot {
@@ -176,4 +197,22 @@ model BatteryJobSlot {
 
   @@unique([jobId, slotNumber])
   @@index([jobId, slotNumber])
+}
+
+model VoltMeterCalibration {
+  id             String   @id @default(cuid())
+  deviceId       String   @unique
+  deviceName     String?
+  inaGain        Float
+  inaOffset      Float
+  pointOneMeter  Float
+  pointOneEsp    Float
+  pointTwoMeter  Float
+  pointTwoEsp    Float
+  syncedAt       DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([deviceName])
+  @@index([updatedAt])
 }

@@ -7,7 +7,17 @@ const featuredLink = {
 
 const qcWorkspaceLinks = [
   {
-    label: 'QC Report',
+    label: 'Battery QC Admin',
+    path: '/battery-qc-admin',
+    className: 'justify-between rounded-[20px] border border-amber-200 bg-amber-50 px-5 py-4 text-left text-base font-bold text-amber-950 hover:bg-amber-100',
+  },
+  {
+    label: 'QC Calibration',
+    path: '/battery-qc-calibration',
+    className: 'justify-between rounded-[20px] border border-violet-200 bg-violet-50 px-5 py-4 text-left text-base font-bold text-violet-950 hover:bg-violet-100',
+  },
+  {
+    label: 'Battery QC Summary',
     path: '/qc-report',
     className: 'justify-between rounded-[20px] border border-rose-200 bg-rose-50 px-5 py-4 text-left text-base font-bold text-rose-950 hover:bg-rose-100',
   },

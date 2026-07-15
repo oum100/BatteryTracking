@@ -6,6 +6,19 @@ const globalForPrisma = globalThis as typeof globalThis & {
   prisma?: PrismaClientInstance
 }
 
+const REQUIRED_PRISMA_DELEGATES = [
+  'battery',
+  'batteryMovement',
+  'employee',
+  'salesOrder',
+  'invoice',
+  'chargeChannel',
+  'chargeProgram',
+  'batteryJob',
+  'batteryJobSlot',
+  'voltMeterCalibration',
+] as const
+
 const TRANSIENT_CONNECTION_PATTERNS = [
   'Error in PostgreSQL connection: Error { kind: Closed, cause: None }',
   'Can\'t reach database server',
@@ -64,8 +77,18 @@ function createPrismaClient() {
   })
 }
 
+function hasRequiredDelegates(client: PrismaClientInstance | undefined) {
+  if (!client) {
+    return false
+  }
+
+  return REQUIRED_PRISMA_DELEGATES.every(delegate => typeof (client as any)[delegate] !== 'undefined')
+}
+
 export const prisma =
-  globalForPrisma.prisma ??
+  (hasRequiredDelegates(globalForPrisma.prisma)
+    ? globalForPrisma.prisma
+    : undefined) ??
   createPrismaClient()
 
 if (process.env.NODE_ENV !== 'production') {

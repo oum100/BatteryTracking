@@ -1,5 +1,5 @@
 import { prisma } from '../../utils/prisma'
-import { formatBatteryJob } from '../../utils/battery-jobs'
+import { batteryJobInclude, formatBatteryJob } from '../../utils/battery-jobs'
 
 export default defineEventHandler(async (event) => {
   const id = getRouterParam(event, 'id')
@@ -13,14 +13,7 @@ export default defineEventHandler(async (event) => {
 
   const job = await prisma.batteryJob.findUnique({
     where: { id },
-    include: {
-      operator: true,
-      salesOrder: true,
-      invoice: true,
-      chargeChannel: true,
-      chargeProgram: true,
-      slots: true,
-    },
+    include: batteryJobInclude,
   })
 
   if (!job) {

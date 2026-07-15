@@ -1,14 +1,18 @@
 import { prisma } from '../../../utils/prisma'
 import {
+  batteryJobInclude,
   ensureBatteryJobPhase,
   ensureOptionalText,
   ensureSlotNumber,
   ensureVoltageUnit,
   findFirstIncompleteSlot,
   formatBatteryJob,
+  getDerivedBatteryJobStatus,
   getPhaseMeasuredAtField,
   getPhaseVoltageField,
   getPhaseVoltageMvField,
+  isBatteryJobLocked,
+  isPhaseEditable,
   normalizeVoltageInput,
   slotHasPhaseMeasurement,
 } from '../../../utils/battery-jobs'
@@ -42,14 +46,7 @@ export default defineEventHandler(async (event) => {
 
   const job = await prisma.batteryJob.findUnique({
     where: { id },
-    include: {
-      operator: true,
-      salesOrder: true,
-      invoice: true,
-      chargeChannel: true,
-      chargeProgram: true,
-      slots: true,
-    },
+    include: batteryJobInclude,
   })
 
   if (!job) {
@@ -59,10 +56,17 @@ export default defineEventHandler(async (event) => {
     })
   }
 
-  if (job.status === 'READY_FOR_DELIVERY') {
+  if (isBatteryJobLocked(job)) {
     throw createError({
       statusCode: 409,
       statusMessage: 'Delivery job is locked and can no longer be edited',
+    })
+  }
+
+  if (!isPhaseEditable(job, phase)) {
+    throw createError({
+      statusCode: 409,
+      statusMessage: 'This phase is already completed or not available yet for this job',
     })
   }
 
@@ -96,6 +100,19 @@ export default defineEventHandler(async (event) => {
     where: { id },
     data: {
       phase,
+      status: getDerivedBatteryJobStatus({
+        ...job,
+        phase,
+        slots: job.slots.map(slot => slot.id === targetSlot.id
+          ? {
+              ...slot,
+              ...(batteryId ? { batteryId } : {}),
+              [getPhaseVoltageField(phase)]: voltage,
+              [getPhaseVoltageMvField(phase)]: millivolts,
+              [getPhaseMeasuredAtField(phase)]: measuredAt,
+            }
+          : slot),
+      }),
       slots: {
         update: {
           where: {
@@ -110,14 +127,7 @@ export default defineEventHandler(async (event) => {
         },
       },
     },
-    include: {
-      operator: true,
-      salesOrder: true,
-      invoice: true,
-      chargeChannel: true,
-      chargeProgram: true,
-      slots: true,
-    },
+    include: batteryJobInclude,
   })
 
   return {

@@ -1,5 +1,6 @@
 import { prisma } from '../../utils/prisma'
 import { ensureRequiredText } from '../../utils/battery-jobs'
+import { requireAdminSession } from '../../utils/admin-auth'
 
 interface ChargeProgramPayload {
   code?: string
@@ -7,6 +8,8 @@ interface ChargeProgramPayload {
 }
 
 export default defineEventHandler(async (event) => {
+  requireAdminSession(event)
+
   const body = await readBody<ChargeProgramPayload>(event)
   const code = ensureRequiredText(body.code, 'code').toUpperCase()
   const name = ensureRequiredText(body.name, 'name')

@@ -2,18 +2,25 @@
 #include <ArduinoJson.h>
 #include <FastLED.h>
 #include <Preferences.h>
+#include <TM1637Display.h>
 #include <WebServer.h>
 #include <WiFi.h>
 #include <WiFiManager.h>
+#include <Wire.h>
 #include <BLEDevice.h>
 #include <BLEHIDDevice.h>
+#include <BLE2902.h>
 #include <BLESecurity.h>
 #include "esp_wifi.h"
+#include "esp_system.h"
 #include <math.h>
 
 const char* DEVICE_ID_PREFIX = "PUMA-VoltMeter-";
 const char* BLE_DEVICE_NAME_PREFIX = "PUMA-Voltmeter-";
-const char* FIRMWARE_VERSION = "2026.07.05";
+const char* FIRMWARE_VERSION = "2026.07.12";
+const char* BLE_VOLTMETER_SERVICE_UUID = "7f9e0001-6a9d-4f7e-8d4d-32e7be6f1001";
+const char* BLE_VOLTMETER_STATUS_CHARACTERISTIC_UUID = "7f9e0002-6a9d-4f7e-8d4d-32e7be6f1001";
+const char* BLE_VOLTMETER_CALIBRATION_CHARACTERISTIC_UUID = "7f9e0003-6a9d-4f7e-8d4d-32e7be6f1001";
 
 const char* CONFIG_AP_SSID_PREFIX = "BattMeter-Setup-";
 const char* CONFIG_AP_PASSWORD = "12345678";
@@ -23,6 +30,12 @@ const char* PREF_MODE_KEY = "mode";
 const char* PREF_DIVIDER_RATIO_KEY = "divider";
 const char* PREF_ADC_GAIN_KEY = "adc_gain";
 const char* PREF_ADC_OFFSET_KEY = "adc_off";
+const char* PREF_INA_GAIN_KEY = "ina_gain";
+const char* PREF_INA_OFFSET_KEY = "ina_off";
+const char* PREF_DISPLAY_BRIGHTNESS_KEY = "disp_br";
+const char* PREF_BOOT_SELFTEST_KEY = "boot_st";
+const char* PREF_ZERO_CLAMP_KEY = "zero_cl";
+const char* PREF_ACTION_BUTTON_PIN_KEY = "btn_pin";
 
 const uint8_t KEYBOARD_REPORT_ID = 0x01;
 const uint8_t KEY_MOD_NONE = 0x00;
@@ -49,10 +62,31 @@ const int8_t WIFI_MAX_TX_POWER_QUARTER_DBM = 60;
 #endif
 
 const int VOLTAGE_PIN = A0;
-const int ACTION_BUTTON_PIN = 1;
+const int DEFAULT_ACTION_BUTTON_PIN = 1;
 const int RGB_PIN = A2;
+const int BUZZER_PIN = 3;
 const int BOOT_BUTTON_PIN = A9;
 const int STATUS_LED_PIN = 8;
+const int TM1637_CLK_PIN = 20;
+const int TM1637_DIO_PIN = 21;
+
+#ifndef I2C_SDA_PIN
+#define I2C_SDA_PIN 8
+#endif
+
+#ifndef I2C_SCL_PIN
+#define I2C_SCL_PIN 9
+#endif
+
+const uint8_t INA226_I2C_ADDRESS = 0x40;
+const uint8_t INA226_REG_CONFIG = 0x00;
+const uint8_t INA226_REG_BUS_VOLTAGE = 0x02;
+const uint8_t INA226_REG_MANUFACTURER_ID = 0xFE;
+const uint8_t INA226_REG_DIE_ID = 0xFF;
+const uint16_t INA226_EXPECTED_MANUFACTURER_ID = 0x5449;
+const uint16_t INA226_EXPECTED_DIE_ID = 0x2260;
+const uint16_t INA226_CONFIG_DEFAULT = 0x4527;
+
 constexpr int NUM_RGB_LEDS = 1;
 CRGB rgbLeds[NUM_RGB_LEDS];
 
@@ -85,7 +119,11 @@ const int ADC_MAX = 4095;
 const float DEFAULT_DIVIDER_RATIO = 9.11f;
 const float DEFAULT_ADC_GAIN = 1.0f;
 const float DEFAULT_ADC_OFFSET = 0.0f;
+const float DEFAULT_INA_GAIN = 0.98277f;
+const float DEFAULT_INA_OFFSET = 0.00743f;
 const float VOLTAGE_OFFSET = 0.00f;
+const float DEFAULT_ZERO_CLAMP_THRESHOLD = 0.02f;
+const float MIN_ACTIVE_MEASUREMENT_VOLTAGE = 0.05f;
 
 const unsigned long SAMPLE_INTERVAL_MS = 120;
 const int SAMPLE_WINDOW = 8;
@@ -96,13 +134,23 @@ const unsigned long HID_KEY_PRESS_MS = 12;
 const unsigned long HID_KEY_RELEASE_MS = 10;
 const unsigned long HID_TYPE_GUARD_MS = 32;
 const unsigned long SEND_ARM_DEBOUNCE_MS = 30;
+const unsigned long ACTION_BUTTON_DEBOUNCE_MS = 25;
+const unsigned long BLE_HOST_SETTLE_MS = 4000;
 const unsigned long MODE_LED_BLINK_ON_MS = 45;
 const unsigned long MODE_LED_BLINK_OFF_MS = 170;
 const unsigned long MODE_LED_PATTERN_GAP_MS = 1200;
+const unsigned long DISPLAY_REFRESH_MS = 160;
+const unsigned long DISPLAY_VALUE_HOLD_MS = 2000;
+const unsigned long STANDBY_TIMEOUT_MS = 60000;
+const unsigned long STANDBY_ANIMATION_INTERVAL_MS = 140;
+const uint8_t DEFAULT_DISPLAY_BRIGHTNESS = 5;
+const bool DEFAULT_BOOT_SELFTEST_ENABLED = true;
+const uint8_t STANDBY_DISPLAY_BRIGHTNESS = 1;
 
 enum RuntimeMode {
   RUNTIME_MODE_WIFI = 0,
   RUNTIME_MODE_BLE = 1,
+  RUNTIME_MODE_CALIBRATION = 2,
 };
 
 float sampleBuffer[SAMPLE_WINDOW];
@@ -114,9 +162,14 @@ int lastAdcMilliVolts = 0;
 float lastAdcVoltageFromRaw = 0.0f;
 float lastAdcVoltageFromMilliVolts = 0.0f;
 float lastAdcVoltageCorrected = 0.0f;
+float lastDisplayVoltage = NAN;
+float heldDisplayVoltage = NAN;
+float pendingHidVoltage = NAN;
 float dividerRatio = DEFAULT_DIVIDER_RATIO;
 float adcGain = DEFAULT_ADC_GAIN;
 float adcOffset = DEFAULT_ADC_OFFSET;
+float inaGain = DEFAULT_INA_GAIN;
+float inaOffset = DEFAULT_INA_OFFSET;
 int stableHits = 0;
 bool isStable = false;
 unsigned long lastSampleAt = 0;
@@ -152,27 +205,105 @@ uint8_t rgbTestIndex = 0;
 bool systemReady = false;
 bool rgbBootAnimationPending = false;
 bool lastMeasurementStable = false;
+bool displayAvailable = false;
 bool hidSendArmed = false;
 bool hidTypedDuringCurrentCycle = false;
+bool displayHoldActive = false;
+bool waitForNewMeasurementCycleAfterSend = false;
+bool stableReadyForSend = false;
 bool lastBootButtonReading = false;
 bool lastActionButtonRawState = true;
+bool actionButtonPressedState = false;
+bool actionButtonDebounceCandidateState = false;
+bool actionButtonDebounceActive = false;
 unsigned long bootButtonPressedAt = 0;
+unsigned long actionButtonDebounceStartedAt = 0;
 unsigned long stableReadHoldUntil = 0;
 unsigned long bootColorHoldUntil = 0;
 unsigned long lastModeLedStepAt = 0;
+unsigned long bleConnectedAt = 0;
+unsigned long lastDisplayRefreshAt = 0;
+unsigned long displayValueHoldUntil = 0;
+unsigned long lastStandbyAnimationAt = 0;
+unsigned long lastMeasurementSeenAt = 0;
 uint8_t modeLedStep = 0;
+uint8_t standbyAnimationIndex = 0;
+uint8_t lastAppliedDisplayBrightness = 0xFF;
 bool modeLedPatternEnabled = true;
+volatile bool actionButtonInterruptPressedState = false;
+volatile bool actionButtonInterruptPending = false;
 
 const unsigned long BOOT_COLOR_HOLD_MS = 1200;
 const unsigned long STABLE_READ_COLOR_HOLD_MS = 1400;
+const unsigned long SELF_TEST_COLOR_MS = 180;
+const unsigned long SELF_TEST_RESULT_MS = 700;
+const unsigned long SELF_TEST_BUZZ_MS = 90;
+const unsigned long SELF_TEST_STEP_GAP_MS = 140;
+const unsigned long SELF_TEST_SWITCH_TIMEOUT_MS = 5000;
+const unsigned long SELF_TEST_SWITCH_HOLD_MS = 50;
 
 Preferences preferences;
 WiFiManager wifiManager;
 WebServer server(80);
+TM1637Display voltageDisplay(TM1637_CLK_PIN, TM1637_DIO_PIN);
 BLEServer* bleServer = nullptr;
 BLEHIDDevice* hidDevice = nullptr;
 BLECharacteristic* inputKeyboard = nullptr;
 BLECharacteristic* outputKeyboard = nullptr;
+BLEService* voltMeterService = nullptr;
+BLECharacteristic* voltMeterStatusCharacteristic = nullptr;
+BLECharacteristic* voltMeterCalibrationCharacteristic = nullptr;
+
+bool ina226Available = false;
+bool bootSelfTestPassed = false;
+bool bootSelfTestEnabled = DEFAULT_BOOT_SELFTEST_ENABLED;
+float lastInaBusVoltage = 0.0f;
+uint16_t ina226ManufacturerId = 0;
+uint16_t ina226DieId = 0;
+uint8_t displayBrightness = DEFAULT_DISPLAY_BRIGHTNESS;
+float zeroClampThreshold = DEFAULT_ZERO_CLAMP_THRESHOLD;
+int actionButtonPin = DEFAULT_ACTION_BUTTON_PIN;
+
+struct BootSelfTestResult {
+  bool rgbOk = false;
+  bool buzzerOk = false;
+  bool switchOk = false;
+  bool inaOk = false;
+  bool switchPressed = false;
+  float busVoltage = 0.0f;
+};
+
+BootSelfTestResult bootSelfTestResult;
+
+void rebootToMode(RuntimeMode mode, const char* source);
+void IRAM_ATTR handleActionButtonInterrupt();
+void syncActionButtonStateFromInterrupt();
+void setupSevenSegmentDisplay();
+void applyDisplayBrightness();
+void applyDisplayBrightness(uint8_t brightnessLevel);
+void loadDisplayBrightness();
+void saveDisplayBrightness(uint8_t brightness);
+void loadBootSelfTestEnabled();
+void saveBootSelfTestEnabled(bool enabled);
+void loadZeroClampThreshold();
+void saveZeroClampThreshold(float threshold);
+bool isActionButtonPinAllowed(int pin);
+void loadActionButtonPin();
+void saveActionButtonPin(int pin);
+void configureActionButtonPin();
+void displayStandbyAnimation();
+void updateSevenSegmentDisplay();
+void displayBootMessage();
+void displaySelfTestResult(bool passed);
+void displayModeMessage();
+void displayVoltageValue(float voltage, bool stable);
+void displayTextValue(const String& text);
+String formatVoltageForDisplay(float voltage, bool stable);
+uint8_t encodeDisplayCharacter(char value);
+void writeDisplayString(const String& text);
+bool readActionButtonPinPressed();
+bool hasLiveMeasurement();
+void updateMeasurementLedState(bool triggered, bool stable);
 
 static const uint8_t KEYBOARD_REPORT_MAP[] = {
   USAGE_PAGE(1), 0x01,
@@ -213,6 +344,28 @@ static const uint8_t KEYBOARD_REPORT_MAP[] = {
 String buildMeasurementPayload();
 void resetMeasurementState();
 bool isActionButtonPressedRaw();
+bool isTriggered();
+bool isWifiConnected();
+void runBootSelfTest();
+bool readIna226Register(uint8_t reg, uint16_t& value);
+bool writeIna226Register(uint8_t reg, uint16_t value);
+bool initIna226();
+float readIna226BusVoltage();
+void buzz(unsigned long durationMs);
+void selfTestStep(const __FlashStringHelper* label, const CRGB& color, unsigned long holdMs = SELF_TEST_STEP_GAP_MS);
+void selfTestPassTone();
+void selfTestFailTone();
+bool waitForActionButtonPress(unsigned long timeoutMs);
+void setRgbColor(const CRGB& color);
+void applyLedState(bool enabled);
+bool isInaGainValid(float value);
+bool isInaOffsetValid(float value);
+void loadInaCalibration();
+void saveInaCalibration(float gain, float offset);
+float applyInaCalibration(float voltage);
+float applyZeroClamp(float voltage);
+String buildBleVoltMeterStatusPayload();
+void updateBleVoltMeterStatusCharacteristic(bool notify = false);
 
 String buildDeviceSuffix() {
   const uint64_t chipId = ESP.getEfuseMac();
@@ -228,8 +381,33 @@ void setupDeviceIdentity() {
   configApSsid = String(CONFIG_AP_SSID_PREFIX) + deviceSuffix;
 }
 
+const char* resetReasonName(esp_reset_reason_t reason) {
+  switch (reason) {
+    case ESP_RST_UNKNOWN: return "UNKNOWN";
+    case ESP_RST_POWERON: return "POWERON";
+    case ESP_RST_EXT: return "EXT";
+    case ESP_RST_SW: return "SW";
+    case ESP_RST_PANIC: return "PANIC";
+    case ESP_RST_INT_WDT: return "INT_WDT";
+    case ESP_RST_TASK_WDT: return "TASK_WDT";
+    case ESP_RST_WDT: return "WDT";
+    case ESP_RST_DEEPSLEEP: return "DEEPSLEEP";
+    case ESP_RST_BROWNOUT: return "BROWNOUT";
+    case ESP_RST_SDIO: return "SDIO";
+    default: return "OTHER";
+  }
+}
+
 const char* runtimeModeName(RuntimeMode mode) {
-  return mode == RUNTIME_MODE_BLE ? "ble" : "wifi";
+  if (mode == RUNTIME_MODE_BLE) {
+    return "ble";
+  }
+
+  if (mode == RUNTIME_MODE_CALIBRATION) {
+    return "calibration";
+  }
+
+  return "wifi";
 }
 
 RuntimeMode parseRuntimeMode(const String& rawMode) {
@@ -238,6 +416,9 @@ RuntimeMode parseRuntimeMode(const String& rawMode) {
   mode.toLowerCase();
   if (mode == "ble") {
     return RUNTIME_MODE_BLE;
+  }
+  if (mode == "calibration" || mode == "cal") {
+    return RUNTIME_MODE_CALIBRATION;
   }
   return RUNTIME_MODE_WIFI;
 }
@@ -267,6 +448,602 @@ bool isAdcGainValid(float value) {
 
 bool isAdcOffsetValid(float value) {
   return !isnan(value) && value >= -2.0f && value <= 2.0f;
+}
+
+bool isInaGainValid(float value) {
+  return !isnan(value) && value >= 0.8f && value <= 1.2f;
+}
+
+bool isInaOffsetValid(float value) {
+  return !isnan(value) && value >= -1.0f && value <= 1.0f;
+}
+
+void setupBuzzer() {
+  pinMode(BUZZER_PIN, OUTPUT);
+  digitalWrite(BUZZER_PIN, LOW);
+}
+
+void buzz(unsigned long durationMs) {
+  digitalWrite(BUZZER_PIN, HIGH);
+  delay(durationMs);
+  digitalWrite(BUZZER_PIN, LOW);
+}
+
+void selfTestStep(const __FlashStringHelper* label, const CRGB& color, unsigned long holdMs) {
+  Serial.print(F("[SELFTEST] "));
+  Serial.println(label);
+  setRgbColor(color);
+  applyLedState(true);
+  displayTextValue(String(label));
+  delay(holdMs);
+}
+
+void selfTestPassTone() {
+  buzz(60);
+  delay(70);
+  buzz(90);
+}
+
+void selfTestFailTone() {
+  buzz(180);
+  delay(120);
+  buzz(180);
+}
+
+bool readActionButtonPinPressed() {
+  return digitalRead(actionButtonPin) == LOW;
+}
+
+void IRAM_ATTR handleActionButtonInterrupt() {
+  actionButtonInterruptPressedState = digitalRead(actionButtonPin) == LOW;
+  actionButtonInterruptPending = true;
+}
+
+void syncActionButtonStateFromInterrupt() {
+  bool pending = false;
+  bool pressed = false;
+
+  noInterrupts();
+  pending = actionButtonInterruptPending;
+  pressed = actionButtonInterruptPressedState;
+  if (pending) {
+    actionButtonInterruptPending = false;
+  }
+  interrupts();
+
+  if (pending) {
+    actionButtonDebounceCandidateState = pressed;
+    actionButtonDebounceStartedAt = millis();
+    actionButtonDebounceActive = true;
+  }
+
+  if (!actionButtonDebounceActive) {
+    return;
+  }
+
+  if (millis() - actionButtonDebounceStartedAt < ACTION_BUTTON_DEBOUNCE_MS) {
+    return;
+  }
+
+  const bool nextPressedState = actionButtonDebounceCandidateState;
+  if (nextPressedState != actionButtonPressedState) {
+    Serial.print("[BUTTON] debounced ");
+    Serial.println(nextPressedState ? "PRESS" : "RELEASE");
+  }
+
+  actionButtonPressedState = nextPressedState;
+  actionButtonDebounceActive = false;
+}
+
+bool waitForActionButtonPress(unsigned long timeoutMs) {
+  const unsigned long startedAt = millis();
+
+  while (millis() - startedAt < timeoutMs) {
+    syncActionButtonStateFromInterrupt();
+    if (isActionButtonPressedRaw()) {
+      delay(SELF_TEST_SWITCH_HOLD_MS);
+      syncActionButtonStateFromInterrupt();
+      if (isActionButtonPressedRaw()) {
+        while (isActionButtonPressedRaw()) {
+          syncActionButtonStateFromInterrupt();
+          delay(10);
+        }
+        return true;
+      }
+    }
+
+    delay(10);
+  }
+
+  return false;
+}
+
+bool waitForActionButtonRelease(unsigned long timeoutMs) {
+  const unsigned long startedAt = millis();
+
+  while (millis() - startedAt < timeoutMs) {
+    syncActionButtonStateFromInterrupt();
+    if (!isActionButtonPressedRaw()) {
+      delay(20);
+      syncActionButtonStateFromInterrupt();
+      return !isActionButtonPressedRaw();
+    }
+
+    delay(10);
+  }
+
+  return !isActionButtonPressedRaw();
+}
+
+void applyDisplayBrightness() {
+  applyDisplayBrightness(displayBrightness);
+}
+
+void applyDisplayBrightness(uint8_t brightnessLevel) {
+  const uint8_t normalizedBrightness = brightnessLevel <= 7 ? brightnessLevel : DEFAULT_DISPLAY_BRIGHTNESS;
+  if (lastAppliedDisplayBrightness == normalizedBrightness) {
+    return;
+  }
+
+  voltageDisplay.setBrightness(normalizedBrightness, true);
+  lastAppliedDisplayBrightness = normalizedBrightness;
+}
+
+void loadDisplayBrightness() {
+  preferences.begin(PREF_NAMESPACE, true);
+  const uint8_t storedBrightness = preferences.getUChar(PREF_DISPLAY_BRIGHTNESS_KEY, DEFAULT_DISPLAY_BRIGHTNESS);
+  preferences.end();
+  displayBrightness = storedBrightness <= 7 ? storedBrightness : DEFAULT_DISPLAY_BRIGHTNESS;
+}
+
+void saveDisplayBrightness(uint8_t brightness) {
+  displayBrightness = brightness <= 7 ? brightness : DEFAULT_DISPLAY_BRIGHTNESS;
+  preferences.begin(PREF_NAMESPACE, false);
+  preferences.putUChar(PREF_DISPLAY_BRIGHTNESS_KEY, displayBrightness);
+  preferences.end();
+  applyDisplayBrightness();
+}
+
+void loadBootSelfTestEnabled() {
+  preferences.begin(PREF_NAMESPACE, true);
+  bootSelfTestEnabled = preferences.getBool(PREF_BOOT_SELFTEST_KEY, DEFAULT_BOOT_SELFTEST_ENABLED);
+  preferences.end();
+}
+
+void saveBootSelfTestEnabled(bool enabled) {
+  bootSelfTestEnabled = enabled;
+  preferences.begin(PREF_NAMESPACE, false);
+  preferences.putBool(PREF_BOOT_SELFTEST_KEY, bootSelfTestEnabled);
+  preferences.end();
+}
+
+void loadZeroClampThreshold() {
+  preferences.begin(PREF_NAMESPACE, true);
+  const float storedThreshold = preferences.getFloat(PREF_ZERO_CLAMP_KEY, DEFAULT_ZERO_CLAMP_THRESHOLD);
+  preferences.end();
+  zeroClampThreshold = (!isnan(storedThreshold) && storedThreshold >= 0.0f && storedThreshold <= 1.0f)
+    ? storedThreshold
+    : DEFAULT_ZERO_CLAMP_THRESHOLD;
+}
+
+void saveZeroClampThreshold(float threshold) {
+  zeroClampThreshold = (!isnan(threshold) && threshold >= 0.0f && threshold <= 1.0f)
+    ? threshold
+    : DEFAULT_ZERO_CLAMP_THRESHOLD;
+  preferences.begin(PREF_NAMESPACE, false);
+  preferences.putFloat(PREF_ZERO_CLAMP_KEY, zeroClampThreshold);
+  preferences.end();
+}
+
+bool isActionButtonPinAllowed(int pin) {
+  if (pin < 0 || pin > 21) {
+    return false;
+  }
+
+  if (pin == VOLTAGE_PIN || pin == RGB_PIN || pin == BUZZER_PIN || pin == BOOT_BUTTON_PIN
+    || pin == STATUS_LED_PIN || pin == TM1637_CLK_PIN || pin == TM1637_DIO_PIN
+    || pin == I2C_SDA_PIN || pin == I2C_SCL_PIN) {
+    return false;
+  }
+
+  return true;
+}
+
+void loadActionButtonPin() {
+  preferences.begin(PREF_NAMESPACE, true);
+  const int storedPin = preferences.getInt(PREF_ACTION_BUTTON_PIN_KEY, DEFAULT_ACTION_BUTTON_PIN);
+  preferences.end();
+  actionButtonPin = isActionButtonPinAllowed(storedPin) ? storedPin : DEFAULT_ACTION_BUTTON_PIN;
+}
+
+void saveActionButtonPin(int pin) {
+  actionButtonPin = isActionButtonPinAllowed(pin) ? pin : DEFAULT_ACTION_BUTTON_PIN;
+  preferences.begin(PREF_NAMESPACE, false);
+  preferences.putInt(PREF_ACTION_BUTTON_PIN_KEY, actionButtonPin);
+  preferences.end();
+}
+
+void configureActionButtonPin() {
+  pinMode(actionButtonPin, INPUT_PULLUP);
+  actionButtonPressedState = readActionButtonPinPressed();
+  actionButtonDebounceCandidateState = actionButtonPressedState;
+  lastActionButtonRawState = actionButtonPressedState;
+  actionButtonInterruptPressedState = actionButtonPressedState;
+  attachInterrupt(digitalPinToInterrupt(actionButtonPin), handleActionButtonInterrupt, CHANGE);
+}
+
+void setupSevenSegmentDisplay() {
+  applyDisplayBrightness();
+  voltageDisplay.clear();
+  displayAvailable = true;
+}
+
+uint8_t encodeDisplayCharacter(char value) {
+  switch (value) {
+    case '0': return 0x3f;
+    case '1': return 0x06;
+    case '2': return 0x5b;
+    case '3': return 0x4f;
+    case '4': return 0x66;
+    case '5': return 0x6d;
+    case '6': return 0x7d;
+    case '7': return 0x07;
+    case '8': return 0x7f;
+    case '9': return 0x6f;
+    case 'A':
+    case 'a': return 0x77;
+    case 'B':
+    case 'b': return 0x7c;
+    case 'C':
+    case 'c': return 0x39;
+    case 'D':
+    case 'd': return 0x5e;
+    case 'E':
+    case 'e': return 0x79;
+    case 'F':
+    case 'f': return 0x71;
+    case 'G':
+    case 'g': return 0x3d;
+    case 'H':
+    case 'h': return 0x76;
+    case 'I':
+    case 'i': return 0x06;
+    case 'J':
+    case 'j': return 0x1e;
+    case 'L':
+    case 'l': return 0x38;
+    case 'N':
+    case 'n': return 0x54;
+    case 'O':
+    case 'o': return 0x3f;
+    case 'P':
+    case 'p': return 0x73;
+    case 'R':
+    case 'r': return 0x50;
+    case 'S':
+    case 's': return 0x6d;
+    case 'T':
+    case 't': return 0x78;
+    case 'U':
+    case 'u': return 0x3e;
+    case 'Y':
+    case 'y': return 0x6e;
+    case '-': return 0x40;
+    case '_': return 0x08;
+    case ' ': return 0x00;
+    default: return 0x00;
+  }
+}
+
+void writeDisplayString(const String& text) {
+  uint8_t segments[4] = { 0, 0, 0, 0 };
+  uint8_t digitIndex = 0;
+
+  for (size_t charIndex = 0; charIndex < text.length() && digitIndex < 4; charIndex++) {
+    const char currentChar = text[charIndex];
+
+    if (currentChar == '.') {
+      if (digitIndex > 0) {
+        segments[digitIndex - 1] |= 0x80;
+      }
+      continue;
+    }
+
+    segments[digitIndex] = encodeDisplayCharacter(currentChar);
+    digitIndex += 1;
+  }
+
+  voltageDisplay.setSegments(segments);
+}
+
+void displayTextValue(const String& text) {
+  if (!displayAvailable) {
+    return;
+  }
+
+  writeDisplayString(text);
+}
+
+void displayBootMessage() {
+  displayTextValue("boot");
+}
+
+void displaySelfTestResult(bool passed) {
+  displayTextValue(passed ? "PASS" : "FAIL");
+}
+
+void displayModeMessage() {
+  if (activeMode == RUNTIME_MODE_CALIBRATION) {
+    displayTextValue("CAL ");
+    return;
+  }
+
+  if (activeMode == RUNTIME_MODE_BLE) {
+    displayTextValue(bleClientConnected ? "BLE " : "PAIR");
+    return;
+  }
+
+  if (configPortalActive) {
+    displayTextValue(" AP ");
+    return;
+  }
+
+  displayTextValue(isWifiConnected() ? "NET " : "WAIT");
+}
+
+String formatVoltageForDisplay(float voltage, bool stable) {
+  if (isnan(voltage) || voltage <= 0.0f) {
+    return stable ? "0.00" : "----";
+  }
+
+  const float roundedVoltage = voltage >= 0.0f
+    ? floorf((voltage * 100.0f) + 0.5f) / 100.0f
+    : ceilf((voltage * 100.0f) - 0.5f) / 100.0f;
+
+  char buffer[8];
+  snprintf(buffer, sizeof(buffer), "%.2f", roundedVoltage);
+
+  return String(buffer);
+}
+
+void displayVoltageValue(float voltage, bool stable) {
+  if (!displayAvailable) {
+    return;
+  }
+
+  if (isnan(voltage) || voltage <= 0.0f) {
+    displayTextValue(stable ? "0:00" : "----");
+    return;
+  }
+
+  long scaledVoltage = voltage >= 0.0f
+    ? static_cast<long>(floorf((voltage * 100.0f) + 0.5f))
+    : static_cast<long>(ceilf((voltage * 100.0f) - 0.5f));
+  if (scaledVoltage < 0) {
+    scaledVoltage = 0;
+  }
+  if (scaledVoltage > 9999) {
+    scaledVoltage = 9999;
+  }
+
+  voltageDisplay.showNumberDecEx(static_cast<int>(scaledVoltage), 0b01000000, true, 4, 0);
+}
+
+float roundVoltageToTwoDecimals(float voltage) {
+  if (isnan(voltage)) {
+    return voltage;
+  }
+
+  if (voltage >= 0.0f) {
+    return floorf((voltage * 100.0f) + 0.5f) / 100.0f;
+  }
+
+  return ceilf((voltage * 100.0f) - 0.5f) / 100.0f;
+}
+
+void printRoundedVoltage(float voltage) {
+  Serial.print(roundVoltageToTwoDecimals(voltage), 2);
+}
+
+void logVoltageRead(float rawVoltage, float calibratedVoltage, float averageVoltage, bool stable) {
+  Serial.print("[READ] raw=");
+  Serial.print(rawVoltage, 3);
+  Serial.print(" V cal=");
+  Serial.print(calibratedVoltage, 3);
+  Serial.print(" V round2=");
+  printRoundedVoltage(calibratedVoltage);
+  Serial.print(" V avg=");
+  printRoundedVoltage(averageVoltage);
+  Serial.print(" V stable=");
+  Serial.println(stable ? "true" : "false");
+}
+
+void displayStandbyAnimation() {
+  static const uint8_t standbyFrames[][4] = {
+    { 0x40, 0x00, 0x00, 0x00 },
+    { 0x00, 0x40, 0x00, 0x00 },
+    { 0x00, 0x00, 0x40, 0x00 },
+    { 0x00, 0x00, 0x00, 0x40 },
+    { 0x00, 0x00, 0x40, 0x00 },
+    { 0x00, 0x40, 0x00, 0x00 },
+  };
+
+  if (millis() - lastStandbyAnimationAt >= STANDBY_ANIMATION_INTERVAL_MS) {
+    lastStandbyAnimationAt = millis();
+    standbyAnimationIndex = (standbyAnimationIndex + 1) % (sizeof(standbyFrames) / sizeof(standbyFrames[0]));
+  }
+
+  applyDisplayBrightness(STANDBY_DISPLAY_BRIGHTNESS);
+  voltageDisplay.setSegments(standbyFrames[standbyAnimationIndex]);
+}
+
+void updateSevenSegmentDisplay() {
+  if (!displayAvailable) {
+    return;
+  }
+
+  if (millis() - lastDisplayRefreshAt < DISPLAY_REFRESH_MS) {
+    return;
+  }
+
+  lastDisplayRefreshAt = millis();
+
+  if (!systemReady) {
+    displayBootMessage();
+    return;
+  }
+
+  if (displayHoldActive && millis() < displayValueHoldUntil && !isnan(heldDisplayVoltage) && heldDisplayVoltage > 0.0f) {
+    applyDisplayBrightness();
+    displayVoltageValue(heldDisplayVoltage, true);
+    return;
+  }
+
+  if (displayHoldActive && millis() >= displayValueHoldUntil) {
+    displayHoldActive = false;
+  }
+
+  if (!isnan(lastDisplayVoltage) && lastDisplayVoltage > 0.0f) {
+    applyDisplayBrightness();
+    displayVoltageValue(lastDisplayVoltage, isStable);
+    return;
+  }
+
+  const bool standbyTimedOut = lastMeasurementSeenAt == 0
+    ? millis() >= STANDBY_TIMEOUT_MS
+    : (millis() - lastMeasurementSeenAt) >= STANDBY_TIMEOUT_MS;
+
+  if (!standbyTimedOut) {
+    applyDisplayBrightness();
+    displayTextValue("----");
+    return;
+  }
+
+  displayStandbyAnimation();
+}
+
+bool writeIna226Register(uint8_t reg, uint16_t value) {
+  Wire.beginTransmission(INA226_I2C_ADDRESS);
+  Wire.write(reg);
+  Wire.write(static_cast<uint8_t>((value >> 8) & 0xFF));
+  Wire.write(static_cast<uint8_t>(value & 0xFF));
+  return Wire.endTransmission() == 0;
+}
+
+bool readIna226Register(uint8_t reg, uint16_t& value) {
+  Wire.beginTransmission(INA226_I2C_ADDRESS);
+  Wire.write(reg);
+  if (Wire.endTransmission(false) != 0) {
+    return false;
+  }
+
+  if (Wire.requestFrom(INA226_I2C_ADDRESS, static_cast<uint8_t>(2)) != 2) {
+    return false;
+  }
+
+  value = (static_cast<uint16_t>(Wire.read()) << 8) | static_cast<uint16_t>(Wire.read());
+  return true;
+}
+
+bool initIna226() {
+  if (!writeIna226Register(INA226_REG_CONFIG, INA226_CONFIG_DEFAULT)) {
+    return false;
+  }
+
+  if (!readIna226Register(INA226_REG_MANUFACTURER_ID, ina226ManufacturerId)) {
+    return false;
+  }
+
+  if (!readIna226Register(INA226_REG_DIE_ID, ina226DieId)) {
+    return false;
+  }
+
+  if (ina226ManufacturerId != INA226_EXPECTED_MANUFACTURER_ID || ina226DieId != INA226_EXPECTED_DIE_ID) {
+    Serial.print("[INA226] unexpected ids mfg=0x");
+    Serial.print(ina226ManufacturerId, HEX);
+    Serial.print(" die=0x");
+    Serial.println(ina226DieId, HEX);
+  }
+
+  lastInaBusVoltage = readIna226BusVoltage();
+  return true;
+}
+
+float readIna226BusVoltage() {
+  uint16_t rawBusVoltage = 0;
+  if (!readIna226Register(INA226_REG_BUS_VOLTAGE, rawBusVoltage)) {
+    return NAN;
+  }
+
+  return static_cast<float>(rawBusVoltage) * 0.00125f;
+}
+
+void loadInaCalibration() {
+  preferences.begin(PREF_NAMESPACE, true);
+  const float savedInaGain = preferences.getFloat(PREF_INA_GAIN_KEY, DEFAULT_INA_GAIN);
+  const float savedInaOffset = preferences.getFloat(PREF_INA_OFFSET_KEY, DEFAULT_INA_OFFSET);
+  preferences.end();
+
+  inaGain = isInaGainValid(savedInaGain) ? savedInaGain : DEFAULT_INA_GAIN;
+  inaOffset = isInaOffsetValid(savedInaOffset) ? savedInaOffset : DEFAULT_INA_OFFSET;
+  Serial.print("[CAL] ina gain = ");
+  Serial.println(inaGain, 5);
+  Serial.print("[CAL] ina offset = ");
+  Serial.println(inaOffset, 5);
+}
+
+void saveInaCalibration(float gain, float offset) {
+  if (!isInaGainValid(gain) || !isInaOffsetValid(offset)) {
+    return;
+  }
+
+  inaGain = gain;
+  inaOffset = offset;
+  preferences.begin(PREF_NAMESPACE, false);
+  preferences.putFloat(PREF_INA_GAIN_KEY, inaGain);
+  preferences.putFloat(PREF_INA_OFFSET_KEY, inaOffset);
+  preferences.end();
+}
+
+float applyInaCalibration(float voltage) {
+  return (voltage * inaGain) + inaOffset;
+}
+
+float applyZeroClamp(float voltage) {
+  if (isnan(voltage)) {
+    return voltage;
+  }
+
+  return fabsf(voltage) <= zeroClampThreshold ? 0.0f : voltage;
+}
+
+String buildBleVoltMeterStatusPayload() {
+  JsonDocument doc;
+  doc["device_id"] = deviceId;
+  doc["device_name"] = bleDeviceName;
+  doc["fw"] = FIRMWARE_VERSION;
+  doc["ina_gain"] = inaGain;
+  doc["ina_offset"] = inaOffset;
+  doc["voltage"] = lastAverageVoltage;
+  doc["stable"] = isStable;
+  doc["ble_connected"] = bleClientConnected;
+
+  String payload;
+  serializeJson(doc, payload);
+  return payload;
+}
+
+void updateBleVoltMeterStatusCharacteristic(bool notify) {
+  if (!voltMeterStatusCharacteristic) {
+    return;
+  }
+
+  const String payload = buildBleVoltMeterStatusPayload();
+  voltMeterStatusCharacteristic->setValue(payload.c_str());
+
+  if (notify && bleClientConnected) {
+    voltMeterStatusCharacteristic->notify();
+  }
 }
 
 void loadDividerRatio() {
@@ -402,15 +1179,15 @@ void blinkLed(unsigned long intervalMs) {
 }
 
 bool isTriggered() {
-  if (!useLiftSwitch) {
-    return true;
-  }
-
   return isActionButtonPressedRaw();
 }
 
 bool isActionButtonPressedRaw() {
-  return digitalRead(ACTION_BUTTON_PIN) == LOW;
+  return actionButtonPressedState;
+}
+
+bool hasLiveMeasurement() {
+  return sampleCount > 0 && !isnan(lastAverageVoltage) && lastAverageVoltage > 0.0f;
 }
 
 void logActionButtonStateIfChanged() {
@@ -420,7 +1197,7 @@ void logActionButtonStateIfChanged() {
   }
 
   lastActionButtonRawState = pressed;
-  Serial.print("[GPIO1] ACTION_BUTTON = ");
+  Serial.print("[BUTTON] ACTION_BUTTON = ");
   Serial.println(pressed ? "LOW (pressed)" : "HIGH (released)");
 }
 
@@ -506,14 +1283,31 @@ void startKeyboardMeasurementCycle(const char* reason) {
     return;
   }
 
+  if (isnan(lastDisplayVoltage) || lastDisplayVoltage <= 0.0f) {
+    Serial.println("[HID] no live voltage available to send");
+    return;
+  }
+
   hidSendArmed = true;
   hidTypedDuringCurrentCycle = false;
+  pendingHidVoltage = lastDisplayVoltage;
+  heldDisplayVoltage = lastDisplayVoltage;
+  displayHoldActive = true;
+  displayValueHoldUntil = millis() + DISPLAY_VALUE_HOLD_MS;
   lastKeyboardTypedValue = "";
-  resetMeasurementState();
   measurementPayload = buildMeasurementPayload();
   bleStatusMessage = bleClientConnected ? "measuring_for_send" : "waiting_for_host";
-  Serial.print("[HID] cycle started by ");
+  Serial.println("[HID] startKeyboardMeasurementCycle");
+  updateMeasurementLedState(true, true);
+  logVoltageRead(lastAdcVoltageFromMilliVolts, lastAdcVoltageCorrected, pendingHidVoltage, isStable);
+  Serial.print("[HID] captured voltage ");
+  printRoundedVoltage(pendingHidVoltage);
+  Serial.print(" V by ");
   Serial.println(reason);
+}
+
+bool isBleHostReadyForAction() {
+  return bleClientConnected && (millis() - bleConnectedAt >= BLE_HOST_SETTLE_MS);
 }
 
 void updateActionButton() {
@@ -521,16 +1315,34 @@ void updateActionButton() {
 
   if (pressed && !lastBootButtonReading) {
     bootButtonPressedAt = millis();
-    if (activeMode == RUNTIME_MODE_BLE) {
-      startKeyboardMeasurementCycle("button_press");
+    Serial.println("[BUTTON] press edge");
+    if (activeMode == RUNTIME_MODE_BLE && !bleClientConnected) {
+      Serial.println("[HID] short press ignored: no BLE HID host connected");
     }
   }
 
-  if (pressed && lastBootButtonReading) {
-    const unsigned long pressedDuration = millis() - bootButtonPressedAt;
-    if (pressedDuration < SEND_ARM_DEBOUNCE_MS) {
-      lastBootButtonReading = pressed;
-      return;
+  if (!pressed) {
+    const unsigned long pressedDuration = lastBootButtonReading ? (millis() - bootButtonPressedAt) : 0;
+    if (lastBootButtonReading) {
+      Serial.print("[BUTTON] release edge, durationMs=");
+      Serial.println(pressedDuration);
+    }
+
+    if (activeMode == RUNTIME_MODE_BLE && lastBootButtonReading && pressedDuration >= SEND_ARM_DEBOUNCE_MS) {
+      if (!bleClientConnected) {
+        Serial.println("[HID] short press ignored: no BLE HID host connected");
+      } else if (!isBleHostReadyForAction()) {
+        Serial.println("[HID] short press ignored: waiting for BLE HID host settle");
+      } else {
+        startKeyboardMeasurementCycle("button_release");
+      }
+    }
+
+    if (lastBootButtonReading && activeMode != RUNTIME_MODE_BLE && pressedDuration >= SEND_ARM_DEBOUNCE_MS
+      && !isnan(lastDisplayVoltage) && lastDisplayVoltage > 0.0f) {
+      heldDisplayVoltage = lastDisplayVoltage;
+      displayHoldActive = true;
+      displayValueHoldUntil = millis() + DISPLAY_VALUE_HOLD_MS;
     }
   }
 
@@ -549,12 +1361,34 @@ float readBatteryVoltage() {
     return MOCK_VOLTAGE_BASE + (wave * MOCK_VOLTAGE_SWING);
   }
 
-  lastAdcRaw = analogRead(VOLTAGE_PIN);
-  lastAdcMilliVolts = analogReadMilliVolts(VOLTAGE_PIN);
-  lastAdcVoltageFromRaw = (static_cast<float>(lastAdcRaw) / ADC_MAX) * ADC_REFERENCE_VOLTAGE;
-  lastAdcVoltageFromMilliVolts = static_cast<float>(lastAdcMilliVolts) / 1000.0f;
-  lastAdcVoltageCorrected = applyAdcCalibration(lastAdcVoltageFromMilliVolts);
-  return (lastAdcVoltageCorrected * dividerRatio) + VOLTAGE_OFFSET;
+  if (!ina226Available) {
+    lastAdcRaw = 0;
+    lastAdcMilliVolts = 0;
+    lastAdcVoltageFromRaw = 0.0f;
+    lastAdcVoltageFromMilliVolts = 0.0f;
+    lastAdcVoltageCorrected = 0.0f;
+    return NAN;
+  }
+
+  const float rawBusVoltage = readIna226BusVoltage();
+  if (isnan(rawBusVoltage)) {
+    return NAN;
+  }
+
+  const float calibratedBusVoltage = applyZeroClamp(applyInaCalibration(rawBusVoltage));
+  const float activeMeasurementThreshold = zeroClampThreshold > MIN_ACTIVE_MEASUREMENT_VOLTAGE
+    ? zeroClampThreshold
+    : MIN_ACTIVE_MEASUREMENT_VOLTAGE;
+  const float normalizedBusVoltage = fabsf(calibratedBusVoltage) < activeMeasurementThreshold
+    ? 0.0f
+    : calibratedBusVoltage;
+  lastInaBusVoltage = rawBusVoltage;
+  lastAdcRaw = 0;
+  lastAdcMilliVolts = static_cast<int>(normalizedBusVoltage * 1000.0f);
+  lastAdcVoltageFromRaw = 0.0f;
+  lastAdcVoltageFromMilliVolts = rawBusVoltage;
+  lastAdcVoltageCorrected = normalizedBusVoltage;
+  return normalizedBusVoltage;
 }
 
 void resetMeasurementState() {
@@ -564,6 +1398,8 @@ void resetMeasurementState() {
   stableHits = 0;
   isStable = false;
   lastMeasurementStable = false;
+  waitForNewMeasurementCycleAfterSend = false;
+  stableReadyForSend = false;
   sampledAtMs = 0;
 }
 
@@ -600,15 +1436,15 @@ void updateMeasurementLedState(bool triggered, bool stable) {
     return;
   }
 
-  if (millis() < stableReadHoldUntil) {
+  if (displayHoldActive && millis() < displayValueHoldUntil) {
     setRgbColor(CRGB::Blue);
     applyLedState(true);
     return;
   }
 
-  if (useLiftSwitch && isActionButtonPressedRaw()) {
-    setRgbColor(CRGB::Red);
-    applyLedState(true);
+  if (activeMode == RUNTIME_MODE_CALIBRATION) {
+    setRgbColor(CRGB::Purple);
+    blinkLed(260);
     return;
   }
 
@@ -632,37 +1468,59 @@ void updateMeasurementLedState(bool triggered, bool stable) {
     }
   }
 
+  if (millis() < stableReadHoldUntil) {
+    setRgbColor(CRGB::Green);
+    applyLedState(true);
+    return;
+  }
+
+  if (isActionButtonPressedRaw()) {
+    setRgbColor(CRGB::Red);
+    applyLedState(true);
+    return;
+  }
+
   if (!triggered) {
     setRgbColor(CRGB::Green);
     applyLedState(true);
     return;
   }
 
-  if (stable) {
+  if (waitForNewMeasurementCycleAfterSend) {
     setRgbColor(CRGB::Green);
     applyLedState(true);
     return;
   }
 
-  setRgbColor(CRGB::Orange);
-  blinkLed(180);
+  if (stable && stableReadyForSend) {
+    setRgbColor(CRGB::Blue);
+    applyLedState(true);
+    return;
+  }
+
+  setRgbColor(triggered ? CRGB::Green : CRGB::Orange);
+  if (triggered) {
+    applyLedState(true);
+  } else {
+    blinkLed(180);
+  }
 }
 
 String buildMeasurementPayload() {
-  const bool triggered = isTriggered();
+  const bool hasMeasurement = hasLiveMeasurement();
 
   JsonDocument doc;
   doc["id"] = deviceId;
   doc["fw"] = FIRMWARE_VERSION;
   doc["t"] = sampledAtMs;
-  doc["tr"] = triggered ? 1 : 0;
+  doc["tr"] = hasMeasurement ? 1 : 0;
   doc["raw"] = lastAdcRaw;
   doc["adc_mv"] = lastAdcMilliVolts;
   doc["adc_from_raw"] = lastAdcVoltageFromRaw;
   doc["adc"] = lastAdcVoltageFromMilliVolts;
   doc["adc_corrected"] = lastAdcVoltageCorrected;
 
-  if (!triggered) {
+  if (!hasMeasurement) {
     doc["s"] = "idle";
     doc["st"] = 0;
     doc["v"] = 0.0;
@@ -683,16 +1541,18 @@ void updateMeasurement() {
   }
 
   lastSampleAt = millis();
-  const bool triggered = isTriggered();
 
-  if (!triggered) {
+  const float reading = readBatteryVoltage();
+  if (isnan(reading) || reading <= 0.0f) {
     resetMeasurementState();
+    lastDisplayVoltage = NAN;
+    sampledAtMs = millis();
     updateMeasurementLedState(false, false);
     measurementPayload = buildMeasurementPayload();
+    updateBleVoltMeterStatusCharacteristic(false);
     return;
   }
 
-  const float reading = readBatteryVoltage();
   sampleBuffer[sampleIndex] = reading;
   sampleIndex = (sampleIndex + 1) % SAMPLE_WINDOW;
 
@@ -706,6 +1566,8 @@ void updateMeasurement() {
   }
 
   const float averageVoltage = sum / sampleCount;
+  lastDisplayVoltage = averageVoltage;
+  lastMeasurementSeenAt = millis();
 
   if (sampleCount >= 2 && fabsf(averageVoltage - lastAverageVoltage) <= STABLE_DELTA) {
     stableHits += 1;
@@ -713,15 +1575,20 @@ void updateMeasurement() {
     stableHits = 1;
   }
 
+  const bool wasStable = lastMeasurementStable;
   lastAverageVoltage = averageVoltage;
   isStable = (sampleCount >= SAMPLE_WINDOW && stableHits >= STABLE_HITS_REQUIRED);
-  sampledAtMs = millis();
-  if (isStable && !lastMeasurementStable) {
-    stableReadHoldUntil = millis() + STABLE_READ_COLOR_HOLD_MS;
+  if (wasStable && !isStable) {
+    stableReadyForSend = true;
   }
+  if (waitForNewMeasurementCycleAfterSend && !isStable) {
+    waitForNewMeasurementCycleAfterSend = false;
+  }
+  sampledAtMs = millis();
   lastMeasurementStable = isStable;
-  updateMeasurementLedState(true, isStable);
+  updateMeasurementLedState(sampleCount > 0, isStable);
   measurementPayload = buildMeasurementPayload();
+  updateBleVoltMeterStatusCharacteristic(isStable);
 }
 
 void rebootToMode(RuntimeMode mode, const char* source) {
@@ -740,11 +1607,9 @@ void checkBootButtonModeOverride() {
     return;
   }
 
-  const RuntimeMode nextMode = activeMode == RUNTIME_MODE_WIFI ? RUNTIME_MODE_BLE : RUNTIME_MODE_WIFI;
-  saveRuntimeMode(nextMode);
-  activeMode = nextMode;
+  activeMode = RUNTIME_MODE_CALIBRATION;
   Serial.println("[MODE] boot button pressed");
-  Serial.print("[MODE] boot button override -> ");
+  Serial.print("[MODE] boot button override (one-shot) -> ");
   Serial.println(runtimeModeName(activeMode));
 }
 
@@ -803,6 +1668,8 @@ String buildStatusPayload() {
   doc["divider_ratio"] = dividerRatio;
   doc["adc_gain"] = adcGain;
   doc["adc_offset"] = adcOffset;
+  doc["ina_gain"] = inaGain;
+  doc["ina_offset"] = inaOffset;
   doc["voltage_offset"] = VOLTAGE_OFFSET;
   doc["adc_raw"] = lastAdcRaw;
   doc["adc_mv"] = lastAdcMilliVolts;
@@ -865,8 +1732,10 @@ void handleCalibrationUpdate() {
   const String ratioArg = server.arg("ratio");
   const String gainArg = server.arg("adc_gain");
   const String offsetArg = server.arg("adc_offset");
+  const String inaGainArg = server.arg("ina_gain");
+  const String inaOffsetArg = server.arg("ina_offset");
 
-  if (ratioArg.isEmpty() && gainArg.isEmpty() && offsetArg.isEmpty()) {
+  if (ratioArg.isEmpty() && gainArg.isEmpty() && offsetArg.isEmpty() && inaGainArg.isEmpty() && inaOffsetArg.isEmpty()) {
     server.send(400, "application/json", "{\"ok\":false,\"error\":\"calibration_required\"}");
     return;
   }
@@ -874,6 +1743,8 @@ void handleCalibrationUpdate() {
   float nextRatio = dividerRatio;
   float nextGain = adcGain;
   float nextOffset = adcOffset;
+  float nextInaGain = inaGain;
+  float nextInaOffset = inaOffset;
 
   if (!ratioArg.isEmpty()) {
     nextRatio = ratioArg.toFloat();
@@ -887,13 +1758,22 @@ void handleCalibrationUpdate() {
     nextOffset = offsetArg.toFloat();
   }
 
-  if (!isDividerRatioValid(nextRatio) || !isAdcGainValid(nextGain) || !isAdcOffsetValid(nextOffset)) {
+  if (!inaGainArg.isEmpty()) {
+    nextInaGain = inaGainArg.toFloat();
+  }
+
+  if (!inaOffsetArg.isEmpty()) {
+    nextInaOffset = inaOffsetArg.toFloat();
+  }
+
+  if (!isDividerRatioValid(nextRatio) || !isAdcGainValid(nextGain) || !isAdcOffsetValid(nextOffset) || !isInaGainValid(nextInaGain) || !isInaOffsetValid(nextInaOffset)) {
     server.send(400, "application/json", "{\"ok\":false,\"error\":\"invalid_calibration\"}");
     return;
   }
 
   saveDividerRatio(nextRatio);
   saveAdcCalibration(nextGain, nextOffset);
+  saveInaCalibration(nextInaGain, nextInaOffset);
   resetMeasurementState();
   measurementPayload = buildMeasurementPayload();
 
@@ -902,6 +1782,8 @@ void handleCalibrationUpdate() {
   doc["divider_ratio"] = dividerRatio;
   doc["adc_gain"] = adcGain;
   doc["adc_offset"] = adcOffset;
+  doc["ina_gain"] = inaGain;
+  doc["ina_offset"] = inaOffset;
 
   String payload;
   serializeJson(doc, payload);
@@ -913,6 +1795,10 @@ void handleCalibrationUpdate() {
   Serial.println(adcGain, 4);
   Serial.print("[CAL] adc offset updated via http: ");
   Serial.println(adcOffset, 4);
+  Serial.print("[CAL] ina gain updated via http: ");
+  Serial.println(inaGain, 5);
+  Serial.print("[CAL] ina offset updated via http: ");
+  Serial.println(inaOffset, 5);
 }
 
 void handleAutoCalibration() {
@@ -986,6 +1872,8 @@ void handleAutoCalibration() {
   doc["divider_ratio"] = dividerRatio;
   doc["adc_gain"] = adcGain;
   doc["adc_offset"] = adcOffset;
+  doc["ina_gain"] = inaGain;
+  doc["ina_offset"] = inaOffset;
 
   String payload;
   serializeJson(doc, payload);
@@ -1039,6 +1927,8 @@ void handleRoot() {
   html += "<label>Divider ratio <input type='number' name='ratio' step='0.001' min='0.1' max='50' value='" + String(dividerRatio, 3) + "'></label>";
   html += "<br><label>ADC gain <input type='number' name='adc_gain' step='0.0001' min='0.1' max='10' value='" + String(adcGain, 4) + "'></label>";
   html += "<br><label>ADC offset <input type='number' name='adc_offset' step='0.0001' min='-2' max='2' value='" + String(adcOffset, 4) + "'></label>";
+  html += "<br><label>INA gain <input type='number' name='ina_gain' step='0.00001' min='0.8' max='1.2' value='" + String(inaGain, 5) + "'></label>";
+  html += "<br><label>INA offset <input type='number' name='ina_offset' step='0.00001' min='-1' max='1' value='" + String(inaOffset, 5) + "'></label>";
   html += "<button type='submit'>Save Calibration</button></form>";
   html += "<hr><form method='POST' action='/api/calibration/auto'>";
   html += "<p>Guided Auto Calibration</p>";
@@ -1134,43 +2024,111 @@ class BleKeyboardServerCallbacks : public BLEServerCallbacks {
   void onConnect(BLEServer* server) override {
     (void)server;
     bleClientConnected = true;
-    bleStatusMessage = "keyboard_connected";
-    Serial.println("[BLE HID] host connected");
-    updateMeasurementLedState(isTriggered(), isStable);
+    bleConnectedAt = millis();
+    bleStatusMessage = activeMode == RUNTIME_MODE_CALIBRATION ? "calibration_connected" : "keyboard_connected";
+    Serial.println(activeMode == RUNTIME_MODE_CALIBRATION ? "[BLE CAL] host connected" : "[BLE HID] host connected");
+    updateBleVoltMeterStatusCharacteristic(true);
+    updateMeasurementLedState(hasLiveMeasurement(), isStable);
   }
 
   void onDisconnect(BLEServer* server) override {
     (void)server;
     bleClientConnected = false;
-    bleStatusMessage = "keyboard_advertising";
+    bleConnectedAt = 0;
+    bleStatusMessage = activeMode == RUNTIME_MODE_CALIBRATION ? "calibration_advertising" : "keyboard_advertising";
     hidSendArmed = false;
     hidTypedDuringCurrentCycle = false;
     lastKeyboardTypedValue = "";
-    Serial.println("[BLE HID] host disconnected");
+    Serial.println(activeMode == RUNTIME_MODE_CALIBRATION ? "[BLE CAL] host disconnected" : "[BLE HID] host disconnected");
     BLEDevice::startAdvertising();
-    updateMeasurementLedState(isTriggered(), isStable);
+    updateBleVoltMeterStatusCharacteristic(false);
+    updateMeasurementLedState(hasLiveMeasurement(), isStable);
   }
 };
 
-void setupBle() {
-  bleStatusMessage = "keyboard_starting";
+class BleCalibrationCharacteristicCallbacks : public BLECharacteristicCallbacks {
+  void onWrite(BLECharacteristic* characteristic) override {
+    const std::string rawValue = characteristic->getValue();
+    if (rawValue.empty()) {
+      return;
+    }
+
+    JsonDocument doc;
+    const DeserializationError error = deserializeJson(doc, rawValue.c_str());
+    if (error) {
+      Serial.print("[BLE CAL] invalid payload: ");
+      Serial.println(error.c_str());
+      return;
+    }
+
+    const String command = String(doc["cmd"] | "");
+    if (command != "set_calibration") {
+      Serial.print("[BLE CAL] unsupported command: ");
+      Serial.println(command);
+      return;
+    }
+
+    const float nextInaGain = doc["ina_gain"] | NAN;
+    const float nextInaOffset = doc["ina_offset"] | NAN;
+
+    if (!isInaGainValid(nextInaGain) || !isInaOffsetValid(nextInaOffset)) {
+      Serial.println("[BLE CAL] rejected invalid gain/offset");
+      return;
+    }
+
+    saveInaCalibration(nextInaGain, nextInaOffset);
+    resetMeasurementState();
+    measurementPayload = buildMeasurementPayload();
+    updateBleVoltMeterStatusCharacteristic(true);
+    buzz(50);
+    delay(60);
+    buzz(50);
+    Serial.print("[BLE CAL] calibration updated via BLE gain=");
+    Serial.print(inaGain, 5);
+    Serial.print(" offset=");
+    Serial.println(inaOffset, 5);
+  }
+};
+
+void setupBle(bool enableKeyboardHid = true) {
+  bleStatusMessage = enableKeyboardHid ? "keyboard_starting" : "calibration_starting";
   BLEDevice::init(bleDeviceName.c_str());
   BLEDevice::setPower(ESP_PWR_LVL_P9);
 
   bleServer = BLEDevice::createServer();
   bleServer->setCallbacks(new BleKeyboardServerCallbacks());
 
-  hidDevice = new BLEHIDDevice(bleServer);
-  inputKeyboard = hidDevice->inputReport(KEYBOARD_REPORT_ID);
-  outputKeyboard = hidDevice->outputReport(KEYBOARD_REPORT_ID);
-  (void)outputKeyboard;
+  hidDevice = nullptr;
+  inputKeyboard = nullptr;
+  outputKeyboard = nullptr;
 
-  hidDevice->manufacturer()->setValue("PUMA Battery");
-  hidDevice->pnp(0x02, 0x1234, 0xB001, 0x0100);
-  hidDevice->hidInfo(0x00, 0x01);
-  hidDevice->reportMap(const_cast<uint8_t*>(KEYBOARD_REPORT_MAP), sizeof(KEYBOARD_REPORT_MAP));
-  hidDevice->startServices();
-  hidDevice->setBatteryLevel(100);
+  if (enableKeyboardHid) {
+    hidDevice = new BLEHIDDevice(bleServer);
+    inputKeyboard = hidDevice->inputReport(KEYBOARD_REPORT_ID);
+    outputKeyboard = hidDevice->outputReport(KEYBOARD_REPORT_ID);
+    (void)outputKeyboard;
+
+    hidDevice->manufacturer()->setValue("PUMA Battery");
+    hidDevice->pnp(0x02, 0x1234, 0xB001, 0x0100);
+    hidDevice->hidInfo(0x00, 0x01);
+    hidDevice->reportMap(const_cast<uint8_t*>(KEYBOARD_REPORT_MAP), sizeof(KEYBOARD_REPORT_MAP));
+    hidDevice->startServices();
+    hidDevice->setBatteryLevel(100);
+  }
+
+  voltMeterService = bleServer->createService(BLEUUID(BLE_VOLTMETER_SERVICE_UUID));
+  voltMeterStatusCharacteristic = voltMeterService->createCharacteristic(
+    BLEUUID(BLE_VOLTMETER_STATUS_CHARACTERISTIC_UUID),
+    BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY
+  );
+  voltMeterStatusCharacteristic->addDescriptor(new BLE2902());
+  voltMeterCalibrationCharacteristic = voltMeterService->createCharacteristic(
+    BLEUUID(BLE_VOLTMETER_CALIBRATION_CHARACTERISTIC_UUID),
+    BLECharacteristic::PROPERTY_WRITE
+  );
+  voltMeterCalibrationCharacteristic->setCallbacks(new BleCalibrationCharacteristicCallbacks());
+  updateBleVoltMeterStatusCharacteristic(false);
+  voltMeterService->start();
 
   BLESecurity* security = new BLESecurity();
   security->setAuthenticationMode(ESP_LE_AUTH_BOND);
@@ -1180,12 +2138,15 @@ void setupBle() {
   security->setKeySize();
 
   BLEAdvertising* advertising = BLEDevice::getAdvertising();
-  advertising->setAppearance(HID_KEYBOARD);
-  advertising->addServiceUUID(hidDevice->hidService()->getUUID());
+  advertising->setAppearance(enableKeyboardHid ? HID_KEYBOARD : 0x0000);
+  if (enableKeyboardHid && hidDevice) {
+    advertising->addServiceUUID(hidDevice->hidService()->getUUID());
+  }
+  advertising->addServiceUUID(BLEUUID(BLE_VOLTMETER_SERVICE_UUID));
   advertising->start();
 
-  bleStatusMessage = "keyboard_advertising";
-  Serial.println("[BLE HID] keyboard advertising started");
+  bleStatusMessage = enableKeyboardHid ? "keyboard_advertising" : "calibration_advertising";
+  Serial.println(enableKeyboardHid ? "[BLE HID] keyboard advertising started" : "[BLE CAL] calibration advertising started");
   Serial.print("[BLE HID] Device name: ");
   Serial.println(bleDeviceName);
   Serial.print("[BLE HID] Device id: ");
@@ -1197,11 +2158,11 @@ void updateBleKeyboard() {
     return;
   }
 
-  if (!hidSendArmed || !bleClientConnected || !isStable || hidTypedDuringCurrentCycle) {
+  if (!hidSendArmed || !bleClientConnected || hidTypedDuringCurrentCycle || isnan(pendingHidVoltage) || pendingHidVoltage <= 0.0f) {
     return;
   }
 
-  const String typedValue = String(lastAverageVoltage, 3);
+  const String typedValue = String(roundVoltageToTwoDecimals(pendingHidVoltage), 2);
   if (!typeKeyboardText(typedValue, true)) {
     bleStatusMessage = "keyboard_send_failed";
     return;
@@ -1209,9 +2170,15 @@ void updateBleKeyboard() {
 
   hidTypedDuringCurrentCycle = true;
   hidSendArmed = false;
+  pendingHidVoltage = NAN;
+  displayHoldActive = false;
+  waitForNewMeasurementCycleAfterSend = true;
+  stableReadyForSend = false;
   lastKeyboardTypedValue = typedValue;
   bleStatusMessage = "keyboard_value_typed";
   stableReadHoldUntil = millis() + STABLE_READ_COLOR_HOLD_MS;
+  buzz(40);
+  updateMeasurementLedState(hasLiveMeasurement(), isStable);
   Serial.print("[BLE HID] typed voltage: ");
   Serial.println(typedValue);
 }
@@ -1221,11 +2188,90 @@ void setupAdc() {
   analogSetPinAttenuation(VOLTAGE_PIN, ADC_11db);
 }
 
+void setupI2cPeripherals() {
+  Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
+  Wire.setClock(400000);
+  ina226Available = initIna226();
+  if (ina226Available) {
+    Serial.print("[INA226] ready, bus voltage = ");
+    printRoundedVoltage(lastInaBusVoltage);
+    Serial.println(" V");
+  } else {
+    Serial.println("[INA226] not detected");
+  }
+}
+
 void setupStatusIndicators() {
   if (USE_ONBOARD_LED) {
     pinMode(STATUS_LED_PIN, OUTPUT);
     applyLedState(false);
   }
+}
+
+void runBootSelfTest() {
+  bootSelfTestResult = BootSelfTestResult{};
+
+  Serial.println("[SELFTEST] start");
+  selfTestStep(F("buzzer"), CRGB::White, SELF_TEST_BUZZ_MS);
+  buzz(SELF_TEST_BUZZ_MS);
+  bootSelfTestResult.buzzerOk = true;
+  delay(SELF_TEST_STEP_GAP_MS);
+
+  const CRGB colors[] = { CRGB::Red, CRGB::Green, CRGB::Blue };
+  for (const CRGB& color : colors) {
+    setRgbColor(color);
+    delay(SELF_TEST_COLOR_MS);
+  }
+  bootSelfTestResult.rgbOk = true;
+  Serial.println("[SELFTEST] rgb ok");
+
+  selfTestStep(F("ina226"), CRGB::Orange);
+  bootSelfTestResult.inaOk = ina226Available;
+  if (ina226Available) {
+    const float rawBootVoltage = readIna226BusVoltage();
+    if (!isnan(rawBootVoltage)) {
+      const float calibratedBootVoltage = applyInaCalibration(rawBootVoltage);
+      bootSelfTestResult.busVoltage = calibratedBootVoltage;
+      lastInaBusVoltage = rawBootVoltage;
+      Serial.print("[SELFTEST] INA226 bus voltage raw = ");
+      printRoundedVoltage(rawBootVoltage);
+      Serial.print(" V, calibrated = ");
+      printRoundedVoltage(calibratedBootVoltage);
+      Serial.println(" V");
+      delay(SELF_TEST_RESULT_MS);
+    } else {
+      bootSelfTestResult.inaOk = false;
+      Serial.println("[SELFTEST] INA226 read failed");
+    }
+  } else {
+    Serial.println("[SELFTEST] INA226 not detected");
+  }
+
+  selfTestStep(F("press action button"), CRGB::Yellow);
+  bootSelfTestResult.switchPressed = waitForActionButtonPress(SELF_TEST_SWITCH_TIMEOUT_MS);
+  bootSelfTestResult.switchOk = bootSelfTestResult.switchPressed;
+  Serial.print("[SELFTEST] action button pressed = ");
+  Serial.println(bootSelfTestResult.switchPressed ? "true" : "false");
+
+  bootSelfTestPassed = bootSelfTestResult.rgbOk
+    && bootSelfTestResult.buzzerOk
+    && bootSelfTestResult.switchOk
+    && bootSelfTestResult.inaOk;
+
+  Serial.print("[SELFTEST] result = ");
+  Serial.println(bootSelfTestPassed ? "PASS" : "FAIL");
+
+  displaySelfTestResult(bootSelfTestPassed);
+  setRgbColor(bootSelfTestPassed ? CRGB::Green : CRGB::Red);
+  applyLedState(true);
+  if (bootSelfTestPassed) {
+    selfTestPassTone();
+  } else {
+    selfTestFailTone();
+  }
+  delay(SELF_TEST_RESULT_MS);
+  setRgbColor(CRGB::Black);
+  applyLedState(false);
 }
 
 void printBootInfo() {
@@ -1238,6 +2284,8 @@ void printBootInfo() {
   Serial.println(deviceSuffix);
   Serial.print("[BOOT] FIRMWARE_VERSION = ");
   Serial.println(FIRMWARE_VERSION);
+  Serial.print("[BOOT] RESET_REASON = ");
+  Serial.println(resetReasonName(esp_reset_reason()));
   Serial.print("[BOOT] ACTIVE_MODE = ");
   Serial.println(runtimeModeName(activeMode));
   Serial.print("[BOOT] BLE_DEVICE_NAME = ");
@@ -1256,7 +2304,19 @@ void printBootInfo() {
   Serial.print("[BOOT] BOOT_BUTTON_PIN = ");
   Serial.println(BOOT_BUTTON_PIN);
   Serial.print("[BOOT] ACTION_BUTTON_PIN = ");
-  Serial.println(ACTION_BUTTON_PIN);
+  Serial.println(actionButtonPin);
+  Serial.print("[BOOT] BUZZER_PIN = ");
+  Serial.println(BUZZER_PIN);
+  Serial.print("[BOOT] TM1637_CLK_PIN = ");
+  Serial.println(TM1637_CLK_PIN);
+  Serial.print("[BOOT] TM1637_DIO_PIN = ");
+  Serial.println(TM1637_DIO_PIN);
+  Serial.print("[BOOT] DISPLAY_BRIGHTNESS = ");
+  Serial.println(displayBrightness);
+  Serial.print("[BOOT] ZERO_CLAMP_THRESHOLD = ");
+  Serial.println(zeroClampThreshold, 3);
+  Serial.print("[BOOT] SELFTEST_AT_BOOT = ");
+  Serial.println(bootSelfTestEnabled ? "true" : "false");
   Serial.print("[BOOT] USE_LIFT_SWITCH = ");
   Serial.println(useLiftSwitch ? "true" : "false");
   Serial.print("[BOOT] USE_ONBOARD_LED = ");
@@ -1265,6 +2325,14 @@ void printBootInfo() {
   Serial.println(USE_RGB_LED ? "true" : "false");
   Serial.print("[BOOT] RGB_PIN = ");
   Serial.println(RGB_PIN);
+  Serial.print("[BOOT] I2C_SDA_PIN = ");
+  Serial.println(I2C_SDA_PIN);
+  Serial.print("[BOOT] I2C_SCL_PIN = ");
+  Serial.println(I2C_SCL_PIN);
+  Serial.print("[BOOT] INA_GAIN = ");
+  Serial.println(inaGain, 5);
+  Serial.print("[BOOT] INA_OFFSET = ");
+  Serial.println(inaOffset, 5);
   Serial.print("[BOOT] USE_MOCK_VOLTAGE = ");
   Serial.println(useMockVoltage ? "true" : "false");
   Serial.print("[BOOT] DIVIDER_RATIO = ");
@@ -1273,7 +2341,7 @@ void printBootInfo() {
   Serial.println(adcGain, 4);
   Serial.print("[BOOT] ADC_OFFSET = ");
   Serial.println(adcOffset, 4);
-  Serial.println("[BOOT] SERIAL_COMMANDS = help,info,payload,status,wifi,ble,mode,mode wifi,mode ble,clearwifi,mock on/off,lift on/off,rgb on/off/test,reboot");
+  Serial.println("[BOOT] SERIAL_COMMANDS = help / mode / brightness / rgb / mock / lift / selftest / reboot");
   Serial.println("[BOOT] SERIAL_LINE_ENDING = newline or CRLF");
 }
 
@@ -1288,7 +2356,7 @@ void logMeasurementDebug() {
   if (useMockVoltage) {
     Serial.println("[ADC] mock mode");
     Serial.print("  calculated battery voltage: ");
-    Serial.print(readBatteryVoltage(), 3);
+    printRoundedVoltage(readBatteryVoltage());
     Serial.println(" V");
   } else {
     const int raw = analogRead(VOLTAGE_PIN);
@@ -1303,13 +2371,13 @@ void logMeasurementDebug() {
     Serial.print("    adcRaw: ");
     Serial.println(raw);
     Serial.print("    adcVoltageFromRaw: ");
-    Serial.print(adcVoltageFromRaw, 3);
+    printRoundedVoltage(adcVoltageFromRaw);
     Serial.println(" V");
     Serial.println("  analogReadMilliVolts");
     Serial.print("    adcMv: ");
     Serial.println(milliVolts);
     Serial.print("    adcVoltage: ");
-    Serial.print(adcVoltageFromMilliVolts, 3);
+    printRoundedVoltage(adcVoltageFromMilliVolts);
     Serial.println(" V");
     Serial.println("  adc calibration");
     Serial.print("    adcGain: ");
@@ -1317,7 +2385,7 @@ void logMeasurementDebug() {
     Serial.print("    adcOffset: ");
     Serial.println(adcOffset, 4);
     Serial.print("    adcCorrected: ");
-    Serial.print(adcVoltageCorrected, 3);
+    printRoundedVoltage(adcVoltageCorrected);
     Serial.println(" V");
     Serial.println("  calculated battery");
     Serial.print("    dividerRatio: ");
@@ -1325,20 +2393,20 @@ void logMeasurementDebug() {
     Serial.print("    voltageOffset: ");
     Serial.println(VOLTAGE_OFFSET, 3);
     Serial.print("    batteryVoltage: ");
-    Serial.print(batteryVoltage, 3);
+    printRoundedVoltage(batteryVoltage);
     Serial.println(" V");
   }
 
   Serial.println("  filtered result");
   Serial.print("    voltageAvg: ");
-  Serial.print(lastAverageVoltage, 3);
+  printRoundedVoltage(lastAverageVoltage);
   Serial.println(" V");
   Serial.print("    stableHits: ");
   Serial.print(stableHits);
   Serial.print("    stable: ");
   Serial.print(isStable ? "true" : "false");
-  Serial.print("    triggered: ");
-  Serial.println(isTriggered() ? "true" : "false");
+  Serial.print("    liveMeasurement: ");
+  Serial.println(hasLiveMeasurement() ? "true" : "false");
 
   if (pendingDebugSamples > 0) {
     pendingDebugSamples -= 1;
@@ -1353,18 +2421,18 @@ void printMeasurementStatus() {
   Serial.println("[INFO] Measurement");
   Serial.println("  state");
   Serial.print("    state: ");
-  Serial.println(isTriggered() ? (isStable ? "ready" : "measuring") : "idle");
+  Serial.println(hasLiveMeasurement() ? (isStable ? "ready" : "measuring") : "idle");
   Serial.println("  raw input");
   Serial.print("    adcRaw: ");
   Serial.println(lastAdcRaw);
   Serial.print("    adcVoltageFromRaw: ");
-  Serial.print(lastAdcVoltageFromRaw, 3);
+  printRoundedVoltage(lastAdcVoltageFromRaw);
   Serial.println(" V");
   Serial.println("  analogReadMilliVolts");
   Serial.print("    adcMv: ");
   Serial.println(lastAdcMilliVolts);
   Serial.print("    adcVoltage: ");
-  Serial.print(lastAdcVoltageFromMilliVolts, 3);
+  printRoundedVoltage(lastAdcVoltageFromMilliVolts);
   Serial.println(" V");
   Serial.println("  adc calibration");
   Serial.print("    adcGain: ");
@@ -1372,7 +2440,7 @@ void printMeasurementStatus() {
   Serial.print("    adcOffset: ");
   Serial.println(adcOffset, 4);
   Serial.print("    adcCorrected: ");
-  Serial.print(lastAdcVoltageCorrected, 3);
+  printRoundedVoltage(lastAdcVoltageCorrected);
   Serial.println(" V");
   Serial.println("  calculated battery");
   Serial.print("    dividerRatio: ");
@@ -1380,7 +2448,7 @@ void printMeasurementStatus() {
   Serial.print("    voltageOffset: ");
   Serial.println(VOLTAGE_OFFSET, 3);
   Serial.print("    voltageAvg: ");
-  Serial.print(lastAverageVoltage, 3);
+  printRoundedVoltage(lastAverageVoltage);
   Serial.println(" V");
   Serial.println("  filter / status");
   Serial.print("    stableHits: ");
@@ -1389,9 +2457,11 @@ void printMeasurementStatus() {
   Serial.println(sampledAtMs);
   Serial.print("    liftSwitchEnabled: ");
   Serial.println(useLiftSwitch ? "true" : "false");
-  Serial.print("    gpio1Raw: ");
-  Serial.println(digitalRead(ACTION_BUTTON_PIN));
-  Serial.print("    gpio1Pressed: ");
+  Serial.print("    actionButtonPin: ");
+  Serial.println(actionButtonPin);
+  Serial.print("    actionButtonRaw: ");
+  Serial.println(digitalRead(actionButtonPin));
+  Serial.print("    actionButtonPressed: ");
   Serial.println(isActionButtonPressedRaw() ? "true" : "false");
   Serial.print("    mockVoltageEnabled: ");
   Serial.println(useMockVoltage ? "true" : "false");
@@ -1427,48 +2497,63 @@ void printWifiInfo() {
 }
 
 void printBleInfo() {
-  Serial.println("[INFO] BLE HID");
+  Serial.println(activeMode == RUNTIME_MODE_CALIBRATION ? "[INFO] BLE CALIBRATION" : "[INFO] BLE HID");
   Serial.print("  activeMode: ");
   Serial.println(runtimeModeName(activeMode));
   Serial.print("  status: ");
   Serial.println(bleStatusMessage);
   Serial.print("  connected: ");
   Serial.println(bleClientConnected ? "true" : "false");
+  Serial.print("  settleReady: ");
+  Serial.println(isBleHostReadyForAction() ? "true" : "false");
   Serial.print("  name: ");
   Serial.println(bleDeviceName);
   Serial.print("  profile: ");
-  Serial.println("hid_keyboard");
+  Serial.println(activeMode == RUNTIME_MODE_CALIBRATION ? "calibration_gatt" : "hid_keyboard");
   Serial.print("  armed: ");
   Serial.println(hidSendArmed ? "true" : "false");
   Serial.print("  typedThisCycle: ");
   Serial.println(hidTypedDuringCurrentCycle ? "true" : "false");
   Serial.print("  lastTypedValue: ");
   Serial.println(lastKeyboardTypedValue);
-  Serial.println("  action: press A1 once to measure, type voltage, and send Enter");
+  if (activeMode == RUNTIME_MODE_CALIBRATION) {
+    Serial.println("  action: connect from web calibration page, read status, and sync gain/offset");
+    Serial.println("  exit: use serial command hid or mode hid");
+  } else {
+    Serial.println("  action: short press A1, then release to measure, type voltage, and send Enter");
+    Serial.println("  calibration: use serial command calibrate or mode cal");
+  }
 }
 
 void printHelp() {
   Serial.println("[HELP] Commands");
-  Serial.println("  help");
-  Serial.println("  info");
-  Serial.println("  payload");
-  Serial.println("  status");
-  Serial.println("  wifi");
-  Serial.println("  ble");
-  Serial.println("  mode");
-  Serial.println("  mode wifi");
-  Serial.println("  mode ble");
-  Serial.println("  clearwifi");
-  Serial.println("  debug once");
-  Serial.println("  debug <n>");
-  Serial.println("  rgb on");
-  Serial.println("  rgb off");
-  Serial.println("  rgb test");
-  Serial.println("  mock on");
-  Serial.println("  mock off");
-  Serial.println("  lift on");
-  Serial.println("  lift off");
-  Serial.println("  reboot");
+  Serial.println("  Basic");
+  Serial.println("    help | info | status | payload");
+  Serial.println("    wifi | ble");
+  Serial.println("  Mode");
+  Serial.println("    mode");
+  Serial.println("    mode wifi");
+  Serial.println("    mode ble   (alias: mode hid, hid)");
+  Serial.println("    mode cal   (alias: calibrate, cal)");
+  Serial.println("  Display");
+  Serial.println("    brightness");
+  Serial.println("    brightness <0-7>");
+  Serial.println("    clamp");
+  Serial.println("    clamp <0.000-1.000>");
+  Serial.println("  Input");
+  Serial.println("    buttonpin");
+  Serial.println("    buttonpin <gpio>");
+  Serial.println("  RGB");
+  Serial.println("    rgb on | rgb off | rgb test");
+  Serial.println("  Measure");
+  Serial.println("    send   (capture current voltage and type via BLE HID)");
+  Serial.println("    mock on | mock off");
+  Serial.println("    lift on | lift off");
+  Serial.println("  System");
+  Serial.println("    selftest");
+  Serial.println("    selftest boot");
+  Serial.println("    selftest boot on | selftest boot off");
+  Serial.println("    clearwifi | reboot");
   Serial.println("[OK] help");
 }
 
@@ -1478,7 +2563,7 @@ void setRgbManualEnabled(bool enabled) {
 
   if (!enabled) {
     setRgbColor(CRGB::Black);
-    updateMeasurementLedState(isTriggered(), isStable);
+    updateMeasurementLedState(hasLiveMeasurement(), isStable);
     return;
   }
 
@@ -1520,13 +2605,17 @@ void updateRgbTest() {
 void setLiftSwitchEnabled(bool enabled) {
   useLiftSwitch = enabled;
   resetMeasurementState();
+  lastDisplayVoltage = NAN;
+  displayHoldActive = false;
   measurementPayload = buildMeasurementPayload();
-  updateMeasurementLedState(isTriggered(), isStable);
+  updateMeasurementLedState(hasLiveMeasurement(), isStable);
 }
 
 void setMockVoltageEnabled(bool enabled) {
   useMockVoltage = enabled;
   resetMeasurementState();
+  lastDisplayVoltage = NAN;
+  displayHoldActive = false;
   measurementPayload = buildMeasurementPayload();
 }
 
@@ -1542,7 +2631,7 @@ void printModeInfo() {
   Serial.println("[INFO] Mode");
   Serial.print("  active: ");
   Serial.println(runtimeModeName(activeMode));
-  Serial.println("  switch with: mode wifi | mode ble");
+  Serial.println("  switch with: mode wifi | mode ble | mode hid | mode cal | calibrate | hid");
   Serial.println("[OK] mode");
 }
 
@@ -1612,7 +2701,7 @@ void handleSerialCommand(const String& rawCommand) {
     return;
   }
 
-  if (normalizedCommand == "mode ble") {
+  if (normalizedCommand == "mode ble" || normalizedCommand == "mode hid" || normalizedCommand == "hid") {
     if (activeMode == RUNTIME_MODE_BLE) {
       Serial.println("[MODE] already in ble");
       return;
@@ -1621,8 +2710,130 @@ void handleSerialCommand(const String& rawCommand) {
     return;
   }
 
+  if (normalizedCommand == "mode cal" || normalizedCommand == "mode calibration" || normalizedCommand == "calibrate" || normalizedCommand == "cal") {
+    if (activeMode == RUNTIME_MODE_CALIBRATION) {
+      Serial.println("[MODE] already in calibration");
+      return;
+    }
+    rebootToMode(RUNTIME_MODE_CALIBRATION, "serial");
+    return;
+  }
+
+  if (normalizedCommand == "brightness") {
+    Serial.print("[DISPLAY] brightness = ");
+    Serial.println(displayBrightness);
+    Serial.println("[OK] brightness");
+    return;
+  }
+
+  if (normalizedCommand.startsWith("brightness ")) {
+    const String valueText = normalizedCommand.substring(11);
+    const int brightnessValue = valueText.toInt();
+
+    if (valueText.length() > 0 && brightnessValue >= 0 && brightnessValue <= 7) {
+      saveDisplayBrightness(static_cast<uint8_t>(brightnessValue));
+      Serial.print("[DISPLAY] brightness set to ");
+      Serial.println(displayBrightness);
+      Serial.println("[OK] brightness");
+      return;
+    }
+
+    Serial.println("[DISPLAY] brightness must be 0-7");
+    return;
+  }
+
+  if (normalizedCommand == "clamp") {
+    Serial.print("[CLAMP] threshold = ");
+    Serial.println(zeroClampThreshold, 3);
+    Serial.println("[OK] clamp");
+    return;
+  }
+
+  if (normalizedCommand.startsWith("clamp ")) {
+    const String valueText = normalizedCommand.substring(6);
+    const float clampValue = valueText.toFloat();
+
+    if (valueText.length() > 0 && !isnan(clampValue) && clampValue >= 0.0f && clampValue <= 1.0f) {
+      saveZeroClampThreshold(clampValue);
+      Serial.print("[CLAMP] threshold set to ");
+      Serial.println(zeroClampThreshold, 3);
+      Serial.println("[OK] clamp");
+      return;
+    }
+
+    Serial.println("[CLAMP] threshold must be 0.000-1.000");
+    return;
+  }
+
+  if (normalizedCommand == "buttonpin") {
+    Serial.print("[INPUT] action button pin = ");
+    Serial.println(actionButtonPin);
+    Serial.println("[OK] buttonpin");
+    return;
+  }
+
+  if (normalizedCommand.startsWith("buttonpin ")) {
+    const String valueText = normalizedCommand.substring(10);
+    const int nextPin = valueText.toInt();
+
+    if (valueText.length() > 0 && isActionButtonPinAllowed(nextPin)) {
+      detachInterrupt(digitalPinToInterrupt(actionButtonPin));
+      saveActionButtonPin(nextPin);
+      configureActionButtonPin();
+      Serial.print("[INPUT] action button pin set to ");
+      Serial.println(actionButtonPin);
+      Serial.println("[OK] buttonpin");
+      return;
+    }
+
+    Serial.println("[INPUT] invalid button pin for this board");
+    return;
+  }
+
+  if (normalizedCommand == "send" || normalizedCommand == "hid send") {
+    if (activeMode != RUNTIME_MODE_BLE) {
+      Serial.println("[HID] send is available only in BLE HID mode");
+      return;
+    }
+
+    if (!bleClientConnected) {
+      Serial.println("[HID] send ignored: no BLE HID host connected");
+      return;
+    }
+
+    if (!isBleHostReadyForAction()) {
+      Serial.println("[HID] send ignored: waiting for BLE HID host settle");
+      return;
+    }
+
+    startKeyboardMeasurementCycle("serial_send");
+    Serial.println("[OK] send");
+    return;
+  }
+
   if (normalizedCommand == "clearwifi") {
     clearWifiAndRestart();
+    return;
+  }
+
+  if (normalizedCommand == "selftest boot") {
+    Serial.print("[SELFTEST] boot = ");
+    Serial.println(bootSelfTestEnabled ? "on" : "off");
+    Serial.println("[OK] selftest");
+    return;
+  }
+
+  if (normalizedCommand == "selftest boot on") {
+    saveBootSelfTestEnabled(true);
+    Serial.println("[SELFTEST] boot enabled");
+    Serial.println("[OK] selftest");
+    return;
+  }
+
+  if (normalizedCommand == "selftest boot off") {
+    saveBootSelfTestEnabled(false);
+    Serial.println("[SELFTEST] boot disabled");
+    Serial.println("[OK] selftest");
     return;
   }
 
@@ -1705,6 +2916,12 @@ void handleSerialCommand(const String& rawCommand) {
     return;
   }
 
+  if (normalizedCommand == "selftest") {
+    runBootSelfTest();
+    Serial.println("[OK] selftest");
+    return;
+  }
+
   Serial.print("[WARN] Unknown command: ");
   Serial.println(rawCommand);
   printHelp();
@@ -1712,6 +2929,8 @@ void handleSerialCommand(const String& rawCommand) {
 
 void handleSerialInput() {
   auto readFromStream = [&](Stream& stream) {
+    const bool shouldEcho = (&stream == &Serial);
+
     while (stream.available() > 0) {
       const char nextChar = static_cast<char>(stream.read());
 
@@ -1719,12 +2938,26 @@ void handleSerialInput() {
         if (serialInputBuffer.isEmpty()) {
           continue;
         }
+        if (shouldEcho) {
+          Serial.println();
+        }
         handleSerialCommand(serialInputBuffer);
         serialInputBuffer = "";
         continue;
       }
 
+      if ((nextChar == '\b' || nextChar == 127) && !serialInputBuffer.isEmpty()) {
+        serialInputBuffer.remove(serialInputBuffer.length() - 1);
+        if (shouldEcho) {
+          Serial.print("\b \b");
+        }
+        continue;
+      }
+
       serialInputBuffer += nextChar;
+      if (shouldEcho) {
+        Serial.write(nextChar);
+      }
     }
   };
 
@@ -1784,7 +3017,16 @@ void setupBleMode() {
   configPortalActive = false;
   WiFi.disconnect(true, true);
   WiFi.mode(WIFI_OFF);
-  setupBle();
+  setupBle(true);
+}
+
+void setupCalibrationMode() {
+  wifiStatusMessage = "inactive";
+  wifiFailureReason = "";
+  configPortalActive = false;
+  WiFi.disconnect(true, true);
+  WiFi.mode(WIFI_OFF);
+  setupBle(false);
 }
 
 void setup() {
@@ -1793,17 +3035,30 @@ void setup() {
   Serial.setTimeout(20);
 
   loadRuntimeMode();
+  loadDisplayBrightness();
+  loadBootSelfTestEnabled();
+  loadZeroClampThreshold();
+  loadActionButtonPin();
   loadDividerRatio();
   loadAdcCalibration();
+  loadInaCalibration();
   setupDeviceIdentity();
   pinMode(BOOT_BUTTON_PIN, INPUT_PULLUP);
   checkBootButtonModeOverride();
   printBootInfo();
-  pinMode(ACTION_BUTTON_PIN, INPUT);
-  lastActionButtonRawState = isActionButtonPressedRaw();
+  configureActionButtonPin();
 
   setupAdc();
+  setupBuzzer();
   setupStatusIndicators();
+  setupSevenSegmentDisplay();
+  displayBootMessage();
+  setupI2cPeripherals();
+  if (bootSelfTestEnabled) {
+    runBootSelfTest();
+  } else {
+    Serial.println("[SELFTEST] skipped at boot");
+  }
   measurementPayload = buildMeasurementPayload();
 
   if (activeMode == RUNTIME_MODE_WIFI) {
@@ -1811,8 +3066,10 @@ void setup() {
     if (isWifiConnected()) {
       startHttpServer();
     }
-  } else {
+  } else if (activeMode == RUNTIME_MODE_BLE) {
     setupBleMode();
+  } else {
+    setupCalibrationMode();
   }
 
   systemReady = true;
@@ -1826,7 +3083,7 @@ void loop() {
   if (rgbBootAnimationPending) {
     rgbBootAnimationPending = false;
     bootColorHoldUntil = millis() + BOOT_COLOR_HOLD_MS;
-    updateMeasurementLedState(isTriggered(), isStable);
+    updateMeasurementLedState(hasLiveMeasurement(), isStable);
   }
 
   if (activeMode == RUNTIME_MODE_WIFI) {
@@ -1848,10 +3105,12 @@ void loop() {
 
   updateModeLedPattern();
   handleSerialInput();
+  syncActionButtonStateFromInterrupt();
   logActionButtonStateIfChanged();
 
   updateRgbTest();
   updateMeasurement();
+  updateSevenSegmentDisplay();
 
   if (activeMode == RUNTIME_MODE_WIFI && isWifiConnected() && !httpServerStarted) {
     startHttpServer();
@@ -1861,8 +3120,11 @@ void loop() {
     server.handleClient();
   }
 
-  if (activeMode == RUNTIME_MODE_BLE) {
+  if (activeMode == RUNTIME_MODE_BLE || activeMode == RUNTIME_MODE_CALIBRATION) {
     updateActionButton();
+  }
+
+  if (activeMode == RUNTIME_MODE_BLE) {
     updateBleKeyboard();
   }
 

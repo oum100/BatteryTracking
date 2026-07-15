@@ -1,20 +1,13 @@
 import { prisma } from '../../utils/prisma'
-import { formatBatteryJob } from '../../utils/battery-jobs'
+import { batteryJobInclude, formatBatteryJob } from '../../utils/battery-jobs'
 
 export default defineEventHandler(async () => {
   const jobs = await prisma.batteryJob.findMany({
-    include: {
-      operator: true,
-      salesOrder: true,
-      invoice: true,
-      chargeChannel: true,
-      chargeProgram: true,
-      slots: true,
-    },
+    include: batteryJobInclude,
     orderBy: {
       createdAt: 'desc',
     },
-    take: 100,
+    take: 500,
   })
 
   return {

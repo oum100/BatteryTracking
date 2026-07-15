@@ -21,14 +21,19 @@ interface BatteryJobRecord {
   phase: JobPhase
   status: string
   rackId: string
-  operatorName: string | null
+  beforeChargeOperatorName: string | null
+  afterChargeOperatorName: string | null
+  beforeDeliveryOperatorName: string | null
   salesOrderNumber: string | null
   invoiceNumber: string | null
   chargeChannelName: string | null
   chargeProgramName: string | null
+  plannedDeliveryDate: string | null
+  shipTo: 'AAT' | 'FTM' | null
   beforeChargeCompletedAt: string | null
   afterChargeCompletedAt: string | null
   deliveryCompletedAt: string | null
+  lockedAt: string | null
   createdAt: string
   updatedAt: string
   slots: BatteryJobSlot[]
@@ -125,6 +130,22 @@ function getSectionCompletedAt(job: BatteryJobRecord | null, phase: JobPhase) {
   }
 
   return job.deliveryCompletedAt ?? getLatestMeasuredAt(job.slots, 'deliveryMeasuredAt')
+}
+
+function getPhaseOperatorName(job: BatteryJobRecord | null, phase: JobPhase) {
+  if (!job) {
+    return '-'
+  }
+
+  if (phase === 'BEFORE_CHARGE') {
+    return job.beforeChargeOperatorName || '-'
+  }
+
+  if (phase === 'AFTER_CHARGE') {
+    return job.afterChargeOperatorName || '-'
+  }
+
+  return job.beforeDeliveryOperatorName || '-'
 }
 
 function getLatestMeasuredAt(
@@ -235,15 +256,16 @@ async function exportExcel() {
       { Field: 'Rack #', Value: job.rackId || '-' },
       { Field: 'SO #', Value: job.salesOrderNumber || '-' },
       { Field: 'Invoice #', Value: job.invoiceNumber || '-' },
+      { Field: 'Delivery Date', Value: formatDateOnly(job.plannedDeliveryDate) },
       { Field: 'Channel', Value: job.chargeChannelName || '-' },
       { Field: 'Program Charge', Value: job.chargeProgramName || '-' },
-      { Field: 'Ship to', Value: job.chargeChannelName || '-' },
+      { Field: 'Ship to', Value: job.shipTo || '-' },
       { Field: 'QC Before Charge DateTime', Value: formatDateTime(getSectionCompletedAt(job, 'BEFORE_CHARGE')) },
-      { Field: 'QC Before Charge Operator', Value: job.operatorName || '-' },
+      { Field: 'QC Before Charge Operator', Value: getPhaseOperatorName(job, 'BEFORE_CHARGE') },
       { Field: 'QC After Charge DateTime', Value: formatDateTime(getSectionCompletedAt(job, 'AFTER_CHARGE')) },
-      { Field: 'QC After Charge Operator', Value: job.operatorName || '-' },
+      { Field: 'QC After Charge Operator', Value: getPhaseOperatorName(job, 'AFTER_CHARGE') },
       { Field: 'QC Before Delivery DateTime', Value: formatDateTime(getSectionCompletedAt(job, 'DELIVERY')) },
-      { Field: 'QC Before Delivery Operator', Value: job.operatorName || '-' },
+      { Field: 'QC Before Delivery Operator', Value: getPhaseOperatorName(job, 'DELIVERY') },
     ]
 
     const slotRows = job.slots.map(slot => ({
@@ -303,19 +325,19 @@ async function exportPdf() {
     const beforeHeader = [
       'QC Before Charge',
       `DateTime: ${formatDateOnly(beforeCompletedAt)} ${formatTimeOnly(beforeCompletedAt)}`,
-      `Operator: ${job.operatorName || '-'}`,
+      `Operator: ${getPhaseOperatorName(job, 'BEFORE_CHARGE')}`,
     ].join('\n')
 
     const afterHeader = [
       'QC After Charge',
       `DateTime: ${formatDateOnly(afterCompletedAt)} ${formatTimeOnly(afterCompletedAt)}`,
-      `Operator: ${job.operatorName || '-'}`,
+      `Operator: ${getPhaseOperatorName(job, 'AFTER_CHARGE')}`,
     ].join('\n')
 
     const deliveryHeader = [
       'QC Before Delivery',
       `DateTime: ${formatDateOnly(deliveryCompletedAt)} ${formatTimeOnly(deliveryCompletedAt)}`,
-      `Operator: ${job.operatorName || '-'}`,
+      `Operator: ${getPhaseOperatorName(job, 'DELIVERY')}`,
     ].join('\n')
 
     autoTable(doc, {
@@ -324,6 +346,7 @@ async function exportPdf() {
         'Rack #',
         'SO #',
         'Invoice #',
+        'Delivery Date',
         'Channel',
         'Program Charge',
         'Ship to',
@@ -332,9 +355,10 @@ async function exportPdf() {
         job.rackId || '-',
         job.salesOrderNumber || '-',
         job.invoiceNumber || '-',
+        formatDateOnly(job.plannedDeliveryDate),
         job.chargeChannelName || '-',
         job.chargeProgramName || '-',
-        job.chargeChannelName || '-',
+        job.shipTo || '-',
       ]],
       styles: {
         fontSize: 9,
@@ -411,6 +435,17 @@ function refreshReports() {
           <div class="flex items-end">
             <div class="flex flex-wrap items-stretch justify-start gap-2 sm:justify-end">
               <UButton
+                to="/battery-qc-admin"
+                size="sm"
+                color="neutral"
+                variant="soft"
+                icon="i-lucide-briefcase-business"
+                class="min-h-10 rounded-full border border-rose-200 bg-rose-50 px-4 text-sm font-semibold text-rose-900 shadow-sm hover:bg-rose-100"
+                :ui="{ leadingIcon: 'size-4 text-rose-600' }"
+              >
+                Admin
+              </UButton>
+              <UButton
                 size="sm"
                 color="neutral"
                 variant="soft"
@@ -457,7 +492,7 @@ function refreshReports() {
           body: 'p-3 sm:p-4'
         }"
       >
-        <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
+        <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-7">
           <div class="rounded-[14px] border border-slate-200 bg-slate-50 px-4 py-1">
             <div class="text-[14px] font-normal tracking-[0.08em] text-slate-500">Rack #</div>
             <USelectMenu
@@ -492,6 +527,11 @@ function refreshReports() {
           </div>
 
           <div class="rounded-[14px] border border-slate-200 bg-slate-50 px-4 py-1">
+            <div class="text-[14px] font-normal tracking-[0.08em] text-slate-500">Delivery Date</div>
+            <div class="mt-1 flex h-[40px] items-center text-[0.95rem] font-bold tracking-tight text-slate-950">{{ formatDateOnly(selectedJob.plannedDeliveryDate) }}</div>
+          </div>
+
+          <div class="rounded-[14px] border border-slate-200 bg-slate-50 px-4 py-1">
             <div class="text-[14px] font-normal tracking-[0.08em] text-slate-500">Channel</div>
             <div class="mt-1 flex h-[40px] items-center text-[0.95rem] font-bold tracking-tight text-slate-950">{{ selectedJob.chargeChannelName || '-' }}</div>
           </div>
@@ -503,7 +543,7 @@ function refreshReports() {
 
           <div class="rounded-[14px] border border-slate-200 bg-slate-50 px-4 py-1">
             <div class="text-[14px] font-normal tracking-[0.08em] text-slate-500">Ship to</div>
-            <div class="mt-1 flex h-[40px] items-center text-[0.95rem] font-bold tracking-tight text-slate-950">{{ selectedJob.chargeChannelName || '-' }}</div>
+            <div class="mt-1 flex h-[40px] items-center text-[0.95rem] font-bold tracking-tight text-slate-950">{{ selectedJob.shipTo || '-' }}</div>
           </div>
         </div>
       </UCard>
@@ -543,7 +583,7 @@ function refreshReports() {
                     </div>
                     <div>
                       <div class="text-[14px] font-bold uppercase tracking-[0.16em] text-emerald-700/80">เจ้าหน้าที่</div>
-                      <div class="mt-1 font-bold text-slate-900">{{ selectedJob.operatorName || '-' }}</div>
+                      <div class="mt-1 font-bold text-slate-900">{{ getPhaseOperatorName(selectedJob, 'BEFORE_CHARGE') }}</div>
                     </div>
                   </div>
                 </th>
@@ -556,7 +596,7 @@ function refreshReports() {
                     </div>
                     <div>
                       <div class="text-[14px] font-bold uppercase tracking-[0.16em] text-sky-700/80">เจ้าหน้าที่</div>
-                      <div class="mt-1 font-bold text-slate-900">{{ selectedJob.operatorName || '-' }}</div>
+                      <div class="mt-1 font-bold text-slate-900">{{ getPhaseOperatorName(selectedJob, 'AFTER_CHARGE') }}</div>
                     </div>
                   </div>
                 </th>
@@ -569,7 +609,7 @@ function refreshReports() {
                     </div>
                     <div>
                       <div class="text-[14px] font-bold uppercase tracking-[0.16em] text-amber-700/80">เจ้าหน้าที่</div>
-                      <div class="mt-1 font-bold text-slate-900">{{ selectedJob.operatorName || '-' }}</div>
+                      <div class="mt-1 font-bold text-slate-900">{{ getPhaseOperatorName(selectedJob, 'DELIVERY') }}</div>
                     </div>
                   </div>
                 </th>

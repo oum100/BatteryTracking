@@ -1,6 +1,6 @@
 <script setup lang="ts">
 type SlotMetric = 'before' | 'after' | 'delivery'
-type SlotCardSize = 'compact' | 'full'
+type SlotCardSize = 'overview' | 'compact' | 'full'
 
 const props = withDefaults(defineProps<{
   slotId: string | number
@@ -48,6 +48,23 @@ const sizeUi = computed(() => {
       circle: 'h-[10.5rem] w-[10.5rem]',
       metricIcon: 'h-14 w-14',
       metricValue: 'mt-3 text-[3.25rem]',
+    }
+  }
+
+  if (props.size === 'overview') {
+    return {
+      root: 'rounded-[0.85rem] border-2',
+      header: 'gap-1 px-2 py-1',
+      iconWrap: 'h-5 w-5',
+      icon: 'h-4 w-4',
+      slotText: 'text-[0.8rem]',
+      status: 'px-1.5 py-0.5 text-[7px]',
+      body: 'px-2 pb-1.5 pt-1.5',
+      battId: 'text-[0.85rem]',
+      metrics: 'mt-1 gap-1',
+      circle: 'h-12 w-12',
+      metricIcon: 'h-4 w-4',
+      metricValue: '-mt-0.5 text-[0.75rem]',
     }
   }
 

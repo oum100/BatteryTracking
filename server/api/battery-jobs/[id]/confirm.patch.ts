@@ -1,14 +1,20 @@
 import { prisma } from '../../../utils/prisma'
 import {
   allSlotsMeasured,
+  batteryJobInclude,
   ensureBatteryJobPhase,
+  ensureOptionalText,
   formatBatteryJob,
-  getConfirmedStatus,
+  getDerivedBatteryJobStatus,
+  getNextWorkflowPhase,
   getPhaseCompletionField,
+  getPhaseOperatorField,
+  isPhaseEditable,
 } from '../../../utils/battery-jobs'
 
 interface ConfirmPayload {
   phase?: string
+  operatorId?: string | null
 }
 
 export default defineEventHandler(async (event) => {
@@ -23,23 +29,24 @@ export default defineEventHandler(async (event) => {
 
   const body = await readBody<ConfirmPayload>(event)
   const phase = ensureBatteryJobPhase(body.phase)
+  const operatorId = ensureOptionalText(body.operatorId)
 
   const job = await prisma.batteryJob.findUnique({
     where: { id },
-    include: {
-      operator: true,
-      salesOrder: true,
-      invoice: true,
-      chargeChannel: true,
-      chargeProgram: true,
-      slots: true,
-    },
+    include: batteryJobInclude,
   })
 
   if (!job) {
     throw createError({
       statusCode: 404,
       statusMessage: 'Job not found',
+    })
+  }
+
+  if (!isPhaseEditable(job, phase)) {
+    throw createError({
+      statusCode: 409,
+      statusMessage: 'This phase is already completed or not available yet for this job',
     })
   }
 
@@ -53,19 +60,16 @@ export default defineEventHandler(async (event) => {
   const updatedJob = await prisma.batteryJob.update({
     where: { id },
     data: {
-      phase,
-      status: getConfirmedStatus(phase),
+      phase: getNextWorkflowPhase(phase),
+      status: getDerivedBatteryJobStatus({
+        ...job,
+        phase: getNextWorkflowPhase(phase),
+        [getPhaseCompletionField(phase)]: new Date(),
+      }),
+      ...(operatorId ? { [getPhaseOperatorField(phase)]: operatorId } : {}),
       [getPhaseCompletionField(phase)]: new Date(),
-      ...(phase === 'DELIVERY' ? { lockedAt: new Date() } : {}),
     },
-    include: {
-      operator: true,
-      salesOrder: true,
-      invoice: true,
-      chargeChannel: true,
-      chargeProgram: true,
-      slots: true,
-    },
+    include: batteryJobInclude,
   })
 
   return {

@@ -1,9 +1,10 @@
 import { prisma } from '../../../utils/prisma'
-import { ensureOptionalText, ensureSlotNumber, formatBatteryJob } from '../../../utils/battery-jobs'
+import { batteryJobInclude, ensureOptionalText, ensureSlotNumber, formatBatteryJob, getDerivedBatteryJobStatus, isBatteryJobLocked, isPhaseEditable } from '../../../utils/battery-jobs'
 
 interface SlotBatteryPayload {
   slotNumber?: number
   batteryId?: string | null
+  checkDuplicateId?: boolean
 }
 
 export default defineEventHandler(async (event) => {
@@ -29,14 +30,7 @@ export default defineEventHandler(async (event) => {
 
   const job = await prisma.batteryJob.findUnique({
     where: { id },
-    include: {
-      operator: true,
-      salesOrder: true,
-      invoice: true,
-      chargeChannel: true,
-      chargeProgram: true,
-      slots: true,
-    },
+    include: batteryJobInclude,
   })
 
   if (!job) {
@@ -46,10 +40,17 @@ export default defineEventHandler(async (event) => {
     })
   }
 
-  if (job.status === 'READY_FOR_DELIVERY') {
+  if (isBatteryJobLocked(job)) {
     throw createError({
       statusCode: 409,
       statusMessage: 'Delivery job is locked and can no longer be edited',
+    })
+  }
+
+  if (!isPhaseEditable(job, 'BEFORE_CHARGE')) {
+    throw createError({
+      statusCode: 409,
+      statusMessage: 'Before-charge phase is already completed or not available for this job',
     })
   }
 
@@ -62,9 +63,27 @@ export default defineEventHandler(async (event) => {
     })
   }
 
+  if (body.checkDuplicateId) {
+    const duplicateSlot = job.slots.find(slot => (
+      slot.slotNumber !== slotNumber
+      && String(slot.batteryId ?? '').trim().toUpperCase() === batteryId
+    ))
+
+    if (duplicateSlot) {
+      throw createError({
+        statusCode: 409,
+        statusMessage: `Battery ID already exists in slot ${duplicateSlot.slotNumber}`,
+      })
+    }
+  }
+
   const updatedJob = await prisma.batteryJob.update({
     where: { id },
     data: {
+      status: getDerivedBatteryJobStatus({
+        ...job,
+        slots: job.slots.map(slot => slot.id === targetSlot.id ? { ...slot, batteryId } : slot),
+      }),
       slots: {
         update: {
           where: { id: targetSlot.id },
@@ -72,14 +91,7 @@ export default defineEventHandler(async (event) => {
         },
       },
     },
-    include: {
-      operator: true,
-      salesOrder: true,
-      invoice: true,
-      chargeChannel: true,
-      chargeProgram: true,
-      slots: true,
-    },
+    include: batteryJobInclude,
   })
 
   return {

@@ -1,5 +1,5 @@
 import { prisma } from '../../utils/prisma'
-import { ensureBatteryJobPhase, ensureRequiredText, formatBatteryJob } from '../../utils/battery-jobs'
+import { batteryJobInclude, ensureBatteryJobPhase, ensureRequiredText, formatBatteryJob } from '../../utils/battery-jobs'
 
 export default defineEventHandler(async (event) => {
   const query = getQuery(event)
@@ -10,14 +10,7 @@ export default defineEventHandler(async (event) => {
     where: {
       rackId,
     },
-    include: {
-      operator: true,
-      salesOrder: true,
-      invoice: true,
-      chargeChannel: true,
-      chargeProgram: true,
-      slots: true,
-    },
+    include: batteryJobInclude,
     orderBy: {
       createdAt: 'desc',
     },

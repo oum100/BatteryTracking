@@ -1,30 +1,36 @@
 import { prisma } from '../../utils/prisma'
-
-const defaults = [
-  { code: 'CH-A', name: 'Channel A' },
-  { code: 'CH-B', name: 'Channel B' },
-  { code: 'CH-C', name: 'Channel C' },
-  { code: 'CH-D', name: 'Channel D' },
-]
+import { chargeChannelDefaults } from '../../utils/master-data'
 
 export default defineEventHandler(async () => {
-  const count = await prisma.chargeChannel.count()
+  try {
+    const count = await prisma.chargeChannel.count()
 
-  if (count === 0) {
-    await prisma.chargeChannel.createMany({
-      data: defaults.map(item => ({ ...item, active: true })),
-      skipDuplicates: true,
+    if (count === 0) {
+      await prisma.chargeChannel.createMany({
+        data: chargeChannelDefaults.map(({ id: _id, ...item }) => item),
+        skipDuplicates: true,
+      })
+    }
+
+    const chargeChannels = await prisma.chargeChannel.findMany({
+      where: { active: true },
+      orderBy: [{ code: 'asc' }, { name: 'asc' }],
+      take: 500,
     })
+
+    return {
+      ok: true,
+      chargeChannels,
+      source: 'database',
+    }
   }
+  catch (error) {
+    console.warn('[charge-channels] database unavailable, using fallback defaults', error)
 
-  const chargeChannels = await prisma.chargeChannel.findMany({
-    where: { active: true },
-    orderBy: [{ code: 'asc' }, { name: 'asc' }],
-    take: 500,
-  })
-
-  return {
-    ok: true,
-    chargeChannels,
+    return {
+      ok: true,
+      chargeChannels: [...chargeChannelDefaults],
+      source: 'fallback',
+    }
   }
 })
