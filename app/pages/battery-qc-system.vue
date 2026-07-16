@@ -145,6 +145,7 @@ const newSoNumber = ref('')
 const newSoDescription = ref('')
 const detailModalOpen = ref(false)
 const scanTarget = ref<ScanTarget>('rack')
+const rackPickerOpen = ref(false)
 const bleConnected = ref(false)
 const bleDeviceName = ref('BLE Volt Meter')
 const isBusy = ref(false)
@@ -259,7 +260,21 @@ const employeeSelectOptions = computed(() => employees.value.map(employee => ({
 const selectedEmployeeOption = computed(() => employeeSelectOptions.value
   .find(employee => employee.value === operatorId.value) ?? null)
 const rackOptions = computed(() => jobOptions.value
-  .filter(job => job.hasAssignedRack !== false && job.rackId)
+  .filter((job) => {
+    if (job.hasAssignedRack === false || !job.rackId || job.isLocked) {
+      return false
+    }
+
+    if (phase.value === 'BEFORE_CHARGE') {
+      return !job.beforeChargeCompletedAt
+    }
+
+    if (phase.value === 'AFTER_CHARGE') {
+      return Boolean(job.beforeChargeCompletedAt) && !job.afterChargeCompletedAt
+    }
+
+    return Boolean(job.afterChargeCompletedAt) && !job.deliveryCompletedAt
+  })
   .map(job => ({
     label: `${job.rackId}${job.salesOrderNumber ? ` · ${job.salesOrderNumber}` : ''}`,
     value: job.rackId,
@@ -273,7 +288,21 @@ const chargeProgramOptions = computed(() => chargePrograms.value.map(program => 
   value: program.id,
 })))
 const pendingAdminJobOptions = computed(() => jobOptions.value
-  .filter(job => !job.beforeChargeCompletedAt)
+  .filter((job) => {
+    if (job.isLocked) {
+      return false
+    }
+
+    if (phase.value === 'BEFORE_CHARGE') {
+      return !job.beforeChargeCompletedAt
+    }
+
+    if (phase.value === 'AFTER_CHARGE') {
+      return Boolean(job.beforeChargeCompletedAt) && !job.afterChargeCompletedAt
+    }
+
+    return Boolean(job.afterChargeCompletedAt) && !job.deliveryCompletedAt
+  })
   .map(job => ({
     label: `${job.jobRef ?? job.id.slice(-8).toUpperCase()} · ${job.salesOrderNumber || '-'} · ${job.invoiceNumber || '-'}`,
     value: job.id,
@@ -455,7 +484,26 @@ function isLikelyBatteryIdToken(value: string) {
 }
 
 function sanitizeRackInput(value: string) {
-  return sanitizeBatteryIdInput(value)
+  const rawValue = String(value ?? '').normalize('NFKC').trim()
+  const mapped = Array.from(rawValue)
+    .map((char) => {
+      // Rack labels commonly contain hyphens. Keep them intact for list selections.
+      if (char === '-') {
+        return char
+      }
+
+      if (THAI_DIGIT_MAP[char]) {
+        return THAI_DIGIT_MAP[char]
+      }
+
+      return THAI_TO_ASCII_KEY_MAP[char] ?? char
+    })
+    .join('')
+
+  return mapped
+    .toUpperCase()
+    .replace(/\s+/g, '')
+    .replace(/[^A-Z0-9\-_/.:]/g, '')
 }
 
 function sanitizeEmployeeIdInput(value: string) {
@@ -786,7 +834,7 @@ const canResyncCalibrationToBle = computed(() => Boolean(
   && savedDbCalibration.value,
 ))
 const hasRackAssignedForWorkflow = computed(() => Boolean(
-  (jobHasRecordedSlotData.value || hasPersistedRequiredJobDetails.value || (jobDetailsSaved.value && jobDetailsMatchCurrentJob.value))
+  (hasPersistedRequiredJobDetails.value || (jobDetailsSaved.value && jobDetailsMatchCurrentJob.value))
   && currentJob.value
   && currentJob.value.hasAssignedRack !== false
   && currentJob.value.rackId.trim()
@@ -841,6 +889,19 @@ function resetCurrentJobState() {
   voltageInput.value = ''
   workflowActionMode.value = null
   detailModalOpen.value = false
+}
+
+function resetPhaseContext() {
+  resetCurrentJobState()
+  adminJobId.value = ''
+  rackId.value = ''
+  operatorId.value = ''
+  employeeScanInput.value = ''
+  salesOrderId.value = ''
+  invoiceId.value = ''
+  chargeChannelId.value = ''
+  chargeProgramId.value = getDefaultNightChargeProgramId()
+  openedAt.value = toDateTimeLocalValue(new Date())
 }
 
 function syncWorkflowSlotInputs() {
@@ -1264,9 +1325,7 @@ async function focusQcJobInputAfterPhaseSelect() {
 
 function backToPhaseLanding() {
   phase.value = null
-  workflowActionMode.value = null
-  detailModalOpen.value = false
-  editingSlotNumber.value = null
+  resetPhaseContext()
   actionMessage.value = 'เลือกโหมด QC เพื่อเริ่มงาน'
 }
 
@@ -1395,20 +1454,37 @@ async function handleScannedRackWorkflow(scannedRackId: string) {
       },
     })
 
-    phase.value = response.recommendedPhase
     rackId.value = response.rackId || response.palletId
     openedAt.value = toDateTimeLocalValue(new Date())
 
     if (response.action === 'LOAD_EXISTING' && response.job) {
+      phase.value = response.recommendedPhase
       applyJob(response.job)
-      jobDetailsSaved.value = true
-      await armDefaultWorkflow()
       openedAt.value = toDateTimeLocalValue(new Date())
+
+      if (hasPersistedRequiredJobDetails.value) {
+        jobDetailsSaved.value = true
+        await armDefaultWorkflow()
+      }
+      else {
+        jobDetailsSaved.value = false
+        workflowActionMode.value = null
+      }
+
+      await revealRackLayout()
       actionMessage.value = response.recommendedPhase === 'AFTER_CHARGE'
-        ? `พบ rack ${response.rackId || response.palletId} แล้ว ระบบเปิด phase 2 ให้อัตโนมัติ`
+        ? hasPersistedRequiredJobDetails.value
+          ? `พบ rack ${response.rackId || response.palletId} แล้ว ระบบเปิด phase 2 เพื่อวัด Voltage ต่อ`
+          : `พบ rack ${response.rackId || response.palletId} แล้ว กรุณาเลือก Emp ID ของ QC After Charge แล้วกด Save`
         : response.recommendedPhase === 'DELIVERY'
-          ? `พบ rack ${response.rackId || response.palletId} แล้ว ระบบเปิด phase Delivery ให้อัตโนมัติ`
+          ? hasPersistedRequiredJobDetails.value
+            ? `พบ rack ${response.rackId || response.palletId} แล้ว ระบบเปิด phase Delivery เพื่อวัด Voltage ต่อ`
+            : `พบ rack ${response.rackId || response.palletId} แล้ว กรุณาเลือก Emp ID ของ QC Before Delivery แล้วกด Save`
           : `พบ rack ${response.rackId || response.palletId} แล้ว ระบบกลับเข้า phase ก่อนชาร์จต่อให้อัตโนมัติ`
+
+      if (!hasPersistedRequiredJobDetails.value) {
+        await focusEmployeeInput()
+      }
       return
     }
 
@@ -1430,6 +1506,10 @@ async function handleScannedRackWorkflow(scannedRackId: string) {
 }
 
 async function handleRackInput(value: string) {
+  if (isBusy.value) {
+    return
+  }
+
   rackId.value = sanitizeRackInput(value)
 
   if (!rackId.value.trim()) {
@@ -1440,12 +1520,19 @@ async function handleRackInput(value: string) {
   scanTarget.value = 'rack'
   applyScannedValue(rackId.value)
 
-  if (isAutoScanRackCode(rackId.value)) {
+  const isListedRack = rackOptions.value.some(option => option.value === rackId.value)
+
+  if (phase.value !== 'BEFORE_CHARGE' || isListedRack || isAutoScanRackCode(rackId.value)) {
     await handleScannedRackWorkflow(rackId.value)
     return
   }
 
   await focusEmployeeInput()
+}
+
+async function selectRackFromPicker(selectedRackId: string) {
+  rackPickerOpen.value = false
+  await handleRackInput(selectedRackId)
 }
 
 async function resolveEmployeeId(scannedValue: string) {
@@ -1882,7 +1969,15 @@ function normalizeJob(job: any): BatteryJobRecord {
 
 function applyJob(job: any) {
   const previousJobId = currentJob.value?.id ?? null
-  currentJob.value = normalizeJob(job)
+  const normalizedJob = normalizeJob(job)
+  currentJob.value = normalizedJob
+  const jobOptionIndex = jobOptions.value.findIndex(item => item.id === normalizedJob.id)
+  if (jobOptionIndex >= 0) {
+    jobOptions.value.splice(jobOptionIndex, 1, normalizedJob)
+  }
+  else {
+    jobOptions.value.unshift(normalizedJob)
+  }
   const switchedJob = previousJobId !== null && previousJobId !== currentJob.value.id
   const activeSlotStillExists = currentJob.value.slots.some(slot => slot.slotNumber === selectedSlotNumber.value)
 
@@ -1896,9 +1991,7 @@ function applyJob(job: any) {
     measurementPopupOpen.value = false
   }
 
-  if (phase.value === 'BEFORE_CHARGE' && !currentJob.value.beforeChargeCompletedAt) {
-    adminJobId.value = currentJob.value.id
-  }
+  adminJobId.value = currentJob.value.id
   rackId.value = currentJob.value.rackId
   openedAt.value = toDateTimeLocalValue(new Date(currentJob.value.openedAt))
   operatorId.value = getPhaseOperatorId(currentJob.value, phase.value)
@@ -1966,8 +2059,14 @@ async function applyPendingAdminJob(jobSelection?: string | { value?: string, la
     return
   }
 
-  actionMessage.value = `เลือกใบงาน ${pendingJob.jobRef ?? pendingJob.id.slice(-8).toUpperCase()} แล้ว กรุณากรอกข้อมูลให้ครบและกด Save เพื่อเปิด Rack Layout`
-  await focusRackInputAfterMenuClose()
+  actionMessage.value = `เลือกใบงาน ${pendingJob.jobRef ?? pendingJob.id.slice(-8).toUpperCase()} แล้ว กรุณาเลือก Emp ID และกด Save เพื่อเปิด Rack Layout`
+  await revealRackLayout()
+  if (phase.value === 'BEFORE_CHARGE') {
+    await focusRackInputAfterMenuClose()
+    return
+  }
+
+  await focusEmployeeInput()
 }
 
 function syncSelectedSlot() {
@@ -1989,6 +2088,7 @@ function syncSelectedSlot() {
 
 function selectPhase(nextPhase: JobPhase) {
   phase.value = nextPhase
+  resetPhaseContext()
   jobDetailsSaved.value = false
   workflowActionMode.value = null
   selectedSlotNumber.value = 1
@@ -2001,12 +2101,11 @@ function selectPhase(nextPhase: JobPhase) {
       ? 'เลือก Rack เดิมเพื่อทำ QC After Charge'
       : 'เลือก Rack เดิมเพื่อทำ QC Before Delivery'
   if (nextPhase === 'BEFORE_CHARGE') {
-    adminJobId.value = ''
     void focusQcJobInputAfterPhaseSelect()
     return
   }
 
-  void focusRackInput()
+  void focusRackInputAfterMenuClose()
 }
 
 function selectSlot(slotNumber: number) {
@@ -2479,6 +2578,8 @@ watch(
   },
 )
 
+// Native datalist selection in UInput does not consistently emit a change event.
+// Loading an exact listed Rack here makes selecting and scanning follow the same flow.
 onBeforeUnmount(() => {
   clearMeasurementPopupTimer()
 
@@ -2529,7 +2630,7 @@ onBeforeUnmount(() => {
                 class="rounded-full border border-white/30 bg-white/12 px-4 py-2.5 text-sm font-black text-white hover:bg-white/20 active:bg-white/25"
                 @click="backToPhaseLanding"
               >
-                Change Mode
+                Change Phase
               </UButton>
             </div>
           </div>
@@ -2549,7 +2650,6 @@ onBeforeUnmount(() => {
                 Workflow Active
               </div>
               <UButton
-                v-if="phase === 'BEFORE_CHARGE'"
                 color="neutral"
                 variant="solid"
                 :loading="isBusy"
@@ -2665,29 +2765,54 @@ onBeforeUnmount(() => {
 
             <div class="mt-3 grid gap-3 xl:grid-cols-[1.15fr_repeat(4,minmax(0,1fr))]">
               <UFormField label="Rack #" name="rack-id" required :ui="qcFieldUi">
-                <UInput
-                  id="qc-rack-input"
-                  v-model="rackId"
-                  type="text"
-                  placeholder="Scan Rack QR / Select Rack"
-                  list="rack-options"
-                  :readonly="rackDetailsLocked"
-                  color="neutral"
-                  variant="outline"
-                  size="md"
-                  class="w-full"
-                  :ui="qcInputUpperUi"
-                  autocomplete="off"
-                  autocapitalize="characters"
-                  autocorrect="off"
-                  spellcheck="false"
-                  lang="en"
-                  @update:model-value="rackId = sanitizeRackInput($event)"
-                  @keyup.enter="handleRackInput(rackId)"
-                />
-                <datalist id="rack-options">
-                  <option v-for="job in rackOptions" :key="job.value" :value="job.value">{{ job.label }}</option>
-                </datalist>
+                <div class="flex gap-2">
+                  <UInput
+                    id="qc-rack-input"
+                    v-model="rackId"
+                    type="text"
+                    placeholder="Scan Rack QR"
+                    :readonly="rackDetailsLocked"
+                    color="neutral"
+                    variant="outline"
+                    size="md"
+                    class="min-w-0 flex-1"
+                    :ui="qcInputUpperUi"
+                    autocomplete="off"
+                    autocapitalize="characters"
+                    autocorrect="off"
+                    spellcheck="false"
+                    lang="en"
+                    @update:model-value="rackId = sanitizeRackInput($event)"
+                    @keyup.enter="handleRackInput(rackId)"
+                  />
+                  <UPopover v-model:open="rackPickerOpen">
+                    <UButton
+                      icon="i-lucide-list"
+                      color="neutral"
+                      variant="outline"
+                      size="md"
+                      aria-label="เลือก Rack จากรายการ"
+                      :disabled="rackDetailsLocked"
+                    />
+                    <template #content>
+                      <div class="w-72 p-2">
+                        <p class="px-2 pb-2 text-xs font-bold uppercase tracking-[0.16em] text-slate-500">Racks in progress</p>
+                        <div class="max-h-64 space-y-1 overflow-y-auto">
+                          <UButton
+                            v-for="job in rackOptions"
+                            :key="job.value"
+                            :label="job.label"
+                            color="neutral"
+                            variant="ghost"
+                            class="w-full justify-start text-left"
+                            @click="selectRackFromPicker(job.value)"
+                          />
+                          <p v-if="!rackOptions.length" class="px-2 py-3 text-sm text-slate-500">ไม่มี Rack ที่ทำต่อได้ใน phase นี้</p>
+                        </div>
+                      </div>
+                    </template>
+                  </UPopover>
+                </div>
               </UFormField>
 
               <UFormField label="Emp ID" name="employee-id" required :ui="qcFieldUi">
@@ -2786,8 +2911,112 @@ onBeforeUnmount(() => {
           </template>
 
           <template v-else>
-            <div class="mt-4 grid gap-3 xl:grid-cols-4">
-              <UFormField label="Employee ID" name="employee-id" :ui="qcFieldUi">
+            <div class="mt-4 grid gap-3 xl:grid-cols-[1.15fr_repeat(4,minmax(0,1fr))]">
+              <UFormField label="QC Job" name="phase-qc-job" required :ui="qcFieldUi">
+                <div id="qc-job-input">
+                  <USelectMenu
+                    v-model="adminJobId"
+                    :items="pendingAdminJobOptions"
+                    value-key="value"
+                    label-key="label"
+                    placeholder="เลือกใบงานที่ทำ phase ก่อนหน้าแล้ว"
+                    color="neutral"
+                    variant="outline"
+                    size="md"
+                    class="w-full"
+                    :disabled="jobDetailsLocked"
+                    :search-input="false"
+                    :reset-search-term-on-blur="true"
+                    :reset-search-term-on-select="true"
+                    :ui="qcSelectUi"
+                    @update:model-value="applyPendingAdminJob"
+                  >
+                    <template #default>
+                      <span v-if="selectedPendingAdminJobOption" class="block truncate">
+                        <span class="font-black text-slate-950">{{ selectedPendingAdminJobOption.jobRef }}</span>
+                        <span class="ml-2 text-slate-500">{{ selectedPendingAdminJobOption.salesOrderNumber }} · {{ selectedPendingAdminJobOption.invoiceNumber }}</span>
+                      </span>
+                      <span v-else class="text-slate-400">เลือกใบงาน</span>
+                    </template>
+
+                    <template #item-label="{ item }">
+                      <span class="font-black text-slate-950">{{ item.jobRef }}</span>
+                      <span class="ml-2 text-slate-500">{{ item.salesOrderNumber }} · {{ item.invoiceNumber }}</span>
+                    </template>
+                  </USelectMenu>
+                </div>
+              </UFormField>
+
+              <UFormField label="SO" name="sales-order" :ui="qcFieldUi">
+                <UInput :model-value="currentJob?.salesOrderNumber || '-'" readonly placeholder="-" color="neutral" variant="ghost" size="md" class="w-full" :ui="qcReadonlyUi" />
+              </UFormField>
+
+              <UFormField label="Invoice" name="invoice-number" :ui="qcFieldUi">
+                <UInput :model-value="currentJob?.invoiceNumber || '-'" readonly placeholder="-" color="neutral" variant="ghost" size="md" class="w-full" :ui="qcReadonlyUi" />
+              </UFormField>
+
+              <UFormField label="Ship To" name="ship-to" :ui="qcFieldUi">
+                <UInput :model-value="currentJob?.shipTo || '-'" readonly placeholder="-" color="neutral" variant="ghost" size="md" class="w-full" :ui="qcReadonlyUi" />
+              </UFormField>
+
+              <UFormField label="Ship Date" name="planned-delivery-date" :ui="qcFieldUi">
+                <UInput :model-value="currentJob?.plannedDeliveryDate ? formatDateTime(currentJob.plannedDeliveryDate) : '-'" readonly placeholder="-" color="neutral" variant="ghost" size="md" class="w-full" :ui="qcReadonlyUi" />
+              </UFormField>
+            </div>
+
+            <div class="mt-3 grid gap-3 xl:grid-cols-[1.15fr_repeat(4,minmax(0,1fr))]">
+              <UFormField label="Rack #" name="rack-id" required :ui="qcFieldUi">
+                <div class="flex gap-2">
+                  <UInput
+                    id="qc-rack-input"
+                    v-model="rackId"
+                    type="text"
+                    placeholder="Scan Rack QR เพื่อค้นหาใบงาน"
+                    :readonly="jobDetailsLocked"
+                    color="neutral"
+                    variant="outline"
+                    size="md"
+                    class="min-w-0 flex-1"
+                    :ui="qcInputUpperUi"
+                    autocomplete="off"
+                    autocapitalize="characters"
+                    autocorrect="off"
+                    spellcheck="false"
+                    lang="en"
+                    @update:model-value="rackId = sanitizeRackInput($event)"
+                    @keyup.enter="handleRackInput(rackId)"
+                  />
+                  <UPopover v-model:open="rackPickerOpen">
+                    <UButton
+                      icon="i-lucide-list"
+                      color="neutral"
+                      variant="outline"
+                      size="md"
+                      aria-label="เลือก Rack จากรายการ"
+                      :disabled="jobDetailsLocked"
+                    />
+                    <template #content>
+                      <div class="w-72 p-2">
+                        <p class="px-2 pb-2 text-xs font-bold uppercase tracking-[0.16em] text-slate-500">Racks in progress</p>
+                        <div class="max-h-64 space-y-1 overflow-y-auto">
+                          <UButton
+                            v-for="job in rackOptions"
+                            :key="job.value"
+                            :label="job.label"
+                            color="neutral"
+                            variant="ghost"
+                            class="w-full justify-start text-left"
+                            @click="selectRackFromPicker(job.value)"
+                          />
+                          <p v-if="!rackOptions.length" class="px-2 py-3 text-sm text-slate-500">ไม่มี Rack ที่ทำต่อได้ใน phase นี้</p>
+                        </div>
+                      </div>
+                    </template>
+                  </UPopover>
+                </div>
+              </UFormField>
+
+              <UFormField label="Emp ID" name="employee-id" required :ui="qcFieldUi">
                 <div id="qc-employee-input">
                   <USelectMenu
                     v-model="operatorId"
@@ -2835,84 +3064,17 @@ onBeforeUnmount(() => {
                 />
               </UFormField>
 
-              <UFormField label="Rack #" name="rack-id" :ui="qcFieldUi">
-                <UInput
-                  id="qc-rack-input"
-                  v-model="rackId"
-                  type="text"
-                  placeholder="Scan Rack QR / Select Rack"
-                  list="rack-options"
-                  color="neutral"
-                  variant="outline"
-                  size="md"
-                  class="w-full"
-                  :ui="qcInputUpperUi"
-                  autocomplete="off"
-                  autocapitalize="characters"
-                  autocorrect="off"
-                  spellcheck="false"
-                  lang="en"
-                  @update:model-value="rackId = sanitizeRackInput($event)"
-                  @keyup.enter="handleRackInput(rackId)"
-                />
-                <datalist id="rack-options">
-                  <option v-for="job in rackOptions" :key="job.value" :value="job.value">{{ job.label }}</option>
-                </datalist>
+              <UFormField label="Charge Channel" name="charge-channel" :ui="qcFieldUi">
+                <UInput :model-value="currentJob?.chargeChannelName || '-'" readonly placeholder="-" color="neutral" variant="ghost" size="md" class="w-full" :ui="qcReadonlyUi" />
               </UFormField>
 
-              <UFormField label="Ship Date" name="planned-delivery-date" :ui="qcFieldUi">
-                <UInput
-                  :model-value="currentJob?.plannedDeliveryDate ? formatDateTime(currentJob.plannedDeliveryDate) : '-'"
-                  readonly
-                  placeholder="-"
-                  color="neutral"
-                  variant="ghost"
-                  size="md"
-                  class="w-full"
-                  :ui="qcReadonlyUi"
-                />
+              <UFormField label="Charge Program" name="charge-program" :ui="qcFieldUi">
+                <UInput :model-value="currentJob?.chargeProgramName || '-'" readonly placeholder="-" color="neutral" variant="ghost" size="md" class="w-full" :ui="qcReadonlyUi" />
               </UFormField>
             </div>
 
-            <div class="mt-3 grid gap-3 xl:grid-cols-4">
-              <UFormField label="SO" name="sales-order" :ui="qcFieldUi">
-                <UInput
-                  :model-value="currentJob?.salesOrderNumber || '-'"
-                  readonly
-                  placeholder="-"
-                  color="neutral"
-                  variant="ghost"
-                  size="md"
-                  class="w-full"
-                  :ui="qcReadonlyUi"
-                />
-              </UFormField>
-
-              <UFormField label="Invoice" name="invoice-number" :ui="qcFieldUi">
-                <UInput
-                  :model-value="currentJob?.invoiceNumber || '-'"
-                  readonly
-                  placeholder="-"
-                  color="neutral"
-                  variant="ghost"
-                  size="md"
-                  class="w-full"
-                  :ui="qcReadonlyUi"
-                />
-              </UFormField>
-
-              <UFormField label="Ship To" name="ship-to" :ui="qcFieldUi">
-                <UInput
-                  :model-value="currentJob?.shipTo || '-'"
-                  readonly
-                  placeholder="-"
-                  color="neutral"
-                  variant="ghost"
-                  size="md"
-                  class="w-full"
-                  :ui="qcReadonlyUi"
-                />
-              </UFormField>
+            <div v-if="jobDetailsLocked" class="mt-3 rounded-[14px] border border-amber-300 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-950">
+              Job Details ถูกล็อกแล้ว เพราะ phase นี้ถูก Confirm แล้ว
             </div>
           </template>
           </UCard>

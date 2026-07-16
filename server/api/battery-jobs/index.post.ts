@@ -13,6 +13,7 @@ import {
   getPhaseOperatorField,
   isPendingRackId,
   isBatteryJobLocked,
+  isPhaseEditable,
   jobHasRecordedSlotData,
 } from '../../utils/battery-jobs'
 
@@ -176,10 +177,10 @@ export default defineEventHandler(async (event) => {
   }
 
   if (jobHasRecordedSlotData(existingJob)) {
-    if (phase !== 'BEFORE_CHARGE' || existingJob.beforeChargeCompletedAt || isBatteryJobLocked(existingJob)) {
+    if (!isPhaseEditable(existingJob, phase)) {
       throw createError({
         statusCode: 409,
-        statusMessage: 'This job is confirmed or no longer available for QC Before Charge updates',
+        statusMessage: 'This phase is already completed or not available yet for this job',
       })
     }
 
@@ -195,7 +196,12 @@ export default defineEventHandler(async (event) => {
         id: existingJob.id,
       },
       data: {
-        ...(operatorId ? { beforeChargeOperatorId: operatorId } : {}),
+        phase,
+        status: getDerivedBatteryJobStatus({
+          ...existingJob,
+          phase,
+        }),
+        ...(operatorId ? { [getPhaseOperatorField(phase)]: operatorId } : {}),
         ...(chargeChannelId !== null ? { chargeChannelId } : {}),
         ...(chargeProgramId !== null ? { chargeProgramId } : {}),
       },

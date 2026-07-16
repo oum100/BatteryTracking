@@ -15,7 +15,7 @@ export default defineEventHandler(async (event) => {
     },
   })
 
-  const decision = getScanDecision(job, new Date())
+  const decision = getScanDecision(job)
 
   return {
     ok: true,

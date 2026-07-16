@@ -147,12 +147,112 @@ async function syncChargePrograms() {
   })
 }
 
+function createMockSlots(jobCode, includeAfterCharge) {
+  const measuredAt = new Date()
+
+  return Array.from({ length: 21 }, (_, index) => {
+    const slotNumber = index + 1
+    const beforeVoltage = Number((12.42 + (slotNumber % 5) * 0.01).toFixed(3))
+    const afterVoltage = Number((13.18 + (slotNumber % 5) * 0.01).toFixed(3))
+
+    return {
+      slotNumber,
+      batteryId: `${jobCode}-B${String(slotNumber).padStart(2, '0')}`,
+      beforeVoltage,
+      beforeVoltageMv: Math.round(beforeVoltage * 1000),
+      beforeMeasuredAt: measuredAt,
+      ...(includeAfterCharge
+        ? {
+            afterVoltage,
+            afterVoltageMv: Math.round(afterVoltage * 1000),
+            afterMeasuredAt: measuredAt,
+          }
+        : {}),
+    }
+  })
+}
+
+async function seedWorkflowMocks() {
+  const [operator, salesOrder, invoice, chargeChannel, chargeProgram] = await Promise.all([
+    prisma.employee.findFirst({ where: { active: true }, orderBy: { code: 'asc' } }),
+    prisma.salesOrder.findFirst({ where: { active: true }, orderBy: { soNumber: 'asc' } }),
+    prisma.invoice.findFirst({ where: { active: true }, orderBy: { invoiceNo: 'asc' } }),
+    prisma.chargeChannel.findFirst({ where: { active: true }, orderBy: { code: 'asc' } }),
+    prisma.chargeProgram.findFirst({ where: { active: true }, orderBy: { code: 'asc' } }),
+  ])
+
+  if (!operator || !salesOrder || !invoice || !chargeChannel || !chargeProgram) {
+    throw new Error('Cannot create workflow mocks without master data')
+  }
+
+  await prisma.batteryJob.deleteMany({
+    where: {
+      OR: [
+        { rackId: { startsWith: 'MOCK-P2-' } },
+        { rackId: { startsWith: 'MOCK-P3-' } },
+      ],
+    },
+  })
+
+  const openedAt = new Date()
+  const plannedDeliveryDate = new Date(openedAt)
+  plannedDeliveryDate.setDate(plannedDeliveryDate.getDate() + 7)
+
+  const createJob = (rackId, phase, status, completeAfterCharge) => prisma.batteryJob.create({
+    data: {
+      batchId: `MOCK-${phase}`,
+      rackId,
+      phase,
+      status,
+      openedAt,
+      operatorId: operator.id,
+      beforeChargeOperatorId: operator.id,
+      ...(completeAfterCharge ? { afterChargeOperatorId: operator.id } : {}),
+      salesOrderId: salesOrder.id,
+      invoiceId: invoice.id,
+      chargeChannelId: chargeChannel.id,
+      chargeProgramId: chargeProgram.id,
+      plannedDeliveryDate,
+      shipTo: 'FTM',
+      beforeChargeCompletedAt: openedAt,
+      ...(completeAfterCharge ? { afterChargeCompletedAt: openedAt } : {}),
+      notes: completeAfterCharge
+        ? 'Mock job: QC After Charge completed, ready for QC Before Delivery.'
+        : 'Mock job: QC Before Charge completed, ready for QC After Charge.',
+      slots: {
+        create: createMockSlots(rackId, completeAfterCharge),
+      },
+    },
+  })
+
+  await prisma.$transaction([
+    ...Array.from({ length: 3 }, (_, index) => createJob(
+      `MOCK-P2-${String(index + 1).padStart(2, '0')}`,
+      'AFTER_CHARGE',
+      'AFTER_CHARGING',
+      false,
+    )),
+    ...Array.from({ length: 3 }, (_, index) => createJob(
+      `MOCK-P3-${String(index + 1).padStart(2, '0')}`,
+      'DELIVERY',
+      'QC_FOR_DELIVERY',
+      true,
+    )),
+  ])
+
+  return {
+    phase2Racks: ['MOCK-P2-01', 'MOCK-P2-02', 'MOCK-P2-03'],
+    phase3Racks: ['MOCK-P3-01', 'MOCK-P3-02', 'MOCK-P3-03'],
+  }
+}
+
 async function main() {
   await syncEmployees()
   await syncSalesOrders()
   await syncInvoices()
   await syncChargeChannels()
   await syncChargePrograms()
+  const workflowMocks = await seedWorkflowMocks()
 
   const counts = {
     employees: await prisma.employee.count({ where: { active: true } }),
@@ -164,6 +264,8 @@ async function main() {
   }
 
   console.log('[seed] synced local master data')
+  console.log('[seed] workflow mocks created')
+  console.log(JSON.stringify(workflowMocks, null, 2))
   console.log(JSON.stringify(counts, null, 2))
 }
 

@@ -10,6 +10,8 @@ type ShipToFactory = 'AAT' | 'FTM'
 type FilterShipTo = 'ALL' | ShipToFactory
 type AdminJobViewState = 'NEW_JOB' | 'BEFORE_CHARGING' | 'AFTER_CHARGING' | 'QC_FOR_DELIVERY' | 'SHIPPED'
 type ActionTone = 'info' | 'success' | 'warning' | 'error'
+type JobTableSortKey = 'createdAt' | 'batchRef' | 'jobRef' | 'salesOrderNumber' | 'invoiceNumber' | 'shipTo' | 'plannedDeliveryDate' | 'viewState'
+type SortDirection = 'asc' | 'desc'
 
 interface SalesOrderItem {
   id: string
@@ -58,11 +60,13 @@ interface BatteryJobBulkResponse {
 }
 
 interface AdminJobTableRow {
+  rowNumber?: number
   id: string
   rackId: string
   batchId: string | null
   batchRef: string
   createdAt: string
+  createdAtValue: string
   createdAtRaw: string
   jobRef: string
   salesOrderId: string
@@ -85,7 +89,7 @@ const applyWholeGroup = ref(true)
 const isBusy = ref(false)
 const currentDateTime = ref(new Date())
 const currentPage = ref(1)
-const pageSize = 10
+const pageSize = ref(10)
 let currentDateTimeTimer: ReturnType<typeof setInterval> | null = null
 const colorMode = useColorMode()
 
@@ -118,9 +122,12 @@ const updatePlannedDeliveryDate = ref('')
 const statusFilter = ref<'ALL' | AdminJobViewState>('ALL')
 const salesOrderFilter = ref('ALL')
 const invoiceFilter = ref('ALL')
+const groupFilter = ref('ALL')
 const shipToFilter = ref<FilterShipTo>('ALL')
 const createdDateFilter = ref('')
 const shipDateFilter = ref('')
+const sortKey = ref<JobTableSortKey>('createdAt')
+const sortDirection = ref<SortDirection>('desc')
 
 const shipToOptions = [
   { label: 'AAT', value: 'AAT' },
@@ -148,10 +155,22 @@ const invoiceOptions = computed(() => invoices.value.map(item => ({
 
 const salesOrderFilterOptions = computed(() => [{ label: 'All SO', value: 'ALL' }, ...salesOrderOptions.value])
 const invoiceFilterOptions = computed(() => [{ label: 'All Invoice', value: 'ALL' }, ...invoiceOptions.value])
+const groupFilterOptions = computed(() => [
+  { label: 'All Group ID', value: 'ALL' },
+  ...Array.from(new Set(jobs.value.map(job => job.batchRef).filter(Boolean)))
+    .sort((left, right) => left.localeCompare(right))
+    .map(batchRef => ({ label: batchRef, value: batchRef })),
+])
 const shipToFilterOptions = [
   { label: 'All Ship To', value: 'ALL' },
   { label: 'AAT', value: 'AAT' },
   { label: 'FTM', value: 'FTM' },
+] as const
+const pageSizeOptions = [
+  { label: '10 รายการ', value: 10 },
+  { label: '20 รายการ', value: 20 },
+  { label: '50 รายการ', value: 50 },
+  { label: '100 รายการ', value: 100 },
 ] as const
 
 const currentDateTimeLabel = computed(() => new Intl.DateTimeFormat('th-TH', {
@@ -285,6 +304,10 @@ const navLogoutButtonClass = computed(() => isDarkMode.value
   ? 'rounded-full border border-slate-600 bg-slate-800 px-4 text-slate-100 hover:bg-slate-700'
   : 'rounded-full border border-slate-300 bg-white/92 px-4 text-slate-700 shadow-[0_8px_18px_rgba(15,23,42,0.06)] hover:bg-slate-100')
 
+const tableHeaderButtonClass = computed(() => isDarkMode.value
+  ? 'h-auto rounded-full px-1.5 py-1 text-slate-300 hover:bg-slate-700 hover:text-white'
+  : 'h-auto rounded-full px-1.5 py-1 text-slate-700 hover:bg-slate-300 hover:text-slate-950')
+
 function getJobViewState(job: BatteryJobRecord): AdminJobViewState {
   return job.workflowStage ?? (
     job.lockedAt
@@ -325,7 +348,6 @@ function getStateBadgeClass(state: AdminJobViewState) {
 
 const tableRows = computed<AdminJobTableRow[]>(() => jobs.value
   .slice()
-  .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime())
   .map((job) => {
     const viewState = getJobViewState(job)
     return {
@@ -334,6 +356,7 @@ const tableRows = computed<AdminJobTableRow[]>(() => jobs.value
       batchId: job.batchId,
       batchRef: job.batchRef,
       createdAt: formatDateTime(job.createdAt),
+      createdAtValue: job.createdAt,
       createdAtRaw: toDateInputValue(job.createdAt),
       jobRef: job.jobRef,
       salesOrderId: job.salesOrderId ?? '',
@@ -353,16 +376,44 @@ const filteredRows = computed(() => tableRows.value.filter((row) => {
   if (statusFilter.value !== 'ALL' && row.viewState !== statusFilter.value) return false
   if (salesOrderFilter.value !== 'ALL' && row.salesOrderId !== salesOrderFilter.value) return false
   if (invoiceFilter.value !== 'ALL' && row.invoiceId !== invoiceFilter.value) return false
+  if (groupFilter.value !== 'ALL' && row.batchRef !== groupFilter.value) return false
   if (shipToFilter.value !== 'ALL' && row.shipToRaw !== shipToFilter.value) return false
   if (createdDateFilter.value && row.createdAtRaw !== createdDateFilter.value) return false
   if (shipDateFilter.value && row.plannedDeliveryDateRaw !== shipDateFilter.value) return false
   return true
 }))
 
-const totalPages = computed(() => Math.max(1, Math.ceil(filteredRows.value.length / pageSize)))
+function getSortValue(row: AdminJobTableRow, key: JobTableSortKey) {
+  const values: Record<JobTableSortKey, string> = {
+    createdAt: row.createdAtValue,
+    batchRef: row.batchRef,
+    jobRef: row.jobRef,
+    salesOrderNumber: row.salesOrderNumber,
+    invoiceNumber: row.invoiceNumber,
+    shipTo: row.shipTo,
+    plannedDeliveryDate: row.plannedDeliveryDateRaw,
+    viewState: row.viewStateLabel,
+  }
+
+  return values[key]
+}
+
+const sortedRows = computed(() => filteredRows.value
+  .slice()
+  .sort((left, right) => {
+    const comparison = getSortValue(left, sortKey.value).localeCompare(getSortValue(right, sortKey.value), 'th')
+    return sortDirection.value === 'asc' ? comparison : -comparison
+  }))
+
+const totalPages = computed(() => Math.max(1, Math.ceil(filteredRows.value.length / pageSize.value)))
 const paginatedRows = computed(() => {
-  const start = (currentPage.value - 1) * pageSize
-  return filteredRows.value.slice(start, start + pageSize)
+  const start = (currentPage.value - 1) * pageSize.value
+  return sortedRows.value
+    .slice(start, start + pageSize.value)
+    .map((row, index) => ({
+      ...row,
+      rowNumber: start + index + 1,
+    }))
 })
 
 const selectedRows = computed(() => tableRows.value.filter(row => selectedIds.value.includes(row.id)))
@@ -370,6 +421,7 @@ const allVisibleSelected = computed(() => paginatedRows.value.length > 0 && pagi
 const selectedCount = computed(() => selectedIds.value.length)
 
 const tableColumns = [
+  { accessorKey: 'rowNumber', header: '#' },
   { accessorKey: 'select', header: '' },
   { accessorKey: 'createdAt', header: 'วันที่สร้างใบงาน' },
   { accessorKey: 'batchRef', header: 'Group ID' },
@@ -381,6 +433,31 @@ const tableColumns = [
   { accessorKey: 'viewState', header: 'State' },
   { accessorKey: 'actions', header: '' },
 ] as const
+
+function toggleSort(key: JobTableSortKey) {
+  if (sortKey.value === key) {
+    sortDirection.value = sortDirection.value === 'asc' ? 'desc' : 'asc'
+  }
+  else {
+    sortKey.value = key
+    sortDirection.value = 'asc'
+  }
+
+  currentPage.value = 1
+}
+
+function sortIcon(key: JobTableSortKey) {
+  if (sortKey.value !== key) return 'i-lucide-arrow-up-down'
+  return sortDirection.value === 'asc' ? 'i-lucide-arrow-up' : 'i-lucide-arrow-down'
+}
+
+function updatePageSize(value: number | { value?: number } | null) {
+  const normalized = typeof value === 'object' && value !== null
+    ? Number(value.value)
+    : Number(value)
+
+  pageSize.value = [10, 20, 50, 100].includes(normalized) ? normalized : 10
+}
 
 const createCalendarValue = computed<DateValue | undefined>({
   get: () => createPlannedDeliveryDate.value ? parseDate(createPlannedDeliveryDate.value) : undefined,
@@ -714,7 +791,7 @@ async function deleteSingleJob(id: string) {
   deleteConfirmOpen.value = true
 }
 
-watch([statusFilter, salesOrderFilter, invoiceFilter, shipToFilter, createdDateFilter, shipDateFilter], () => {
+watch([statusFilter, salesOrderFilter, invoiceFilter, groupFilter, shipToFilter, createdDateFilter, shipDateFilter], () => {
   currentPage.value = 1
 })
 
@@ -722,6 +799,10 @@ watch(currentPage, (value) => {
   if (value > totalPages.value) {
     currentPage.value = totalPages.value
   }
+})
+
+watch(pageSize, () => {
+  currentPage.value = 1
 })
 
 onMounted(async () => {
@@ -820,29 +901,19 @@ onBeforeUnmount(() => {
             </div>
           </div>
 
-          <div class="grid gap-3 xl:grid-cols-6">
-            <UFormField label="Filter State" name="status-filter" :ui="adminFieldUi">
-              <USelectMenu v-model="statusFilter" :items="statusFilterOptions" value-key="value" label-key="label" color="neutral" variant="outline" :search-input="false" class="w-full" :ui="adminSelectUi" />
-            </UFormField>
+          <div :class="[isDarkMode ? 'border-slate-700 bg-slate-800/55' : 'border-slate-300 bg-white/55', 'rounded-[15px] border p-3']">
+            <div class="mb-3 flex items-center gap-2">
+              <UIcon name="i-lucide-list-filter" :class="['size-4', workspaceLabelClass]" />
+              <span :class="['text-xs font-black uppercase tracking-[0.18em]', workspaceLabelClass]">Filters</span>
+            </div>
 
-            <UFormField label="Filter SO" name="filter-so" :ui="adminFieldUi">
-              <USelectMenu v-model="salesOrderFilter" :items="salesOrderFilterOptions" value-key="value" label-key="label" color="neutral" variant="outline" :search-input="{ placeholder: 'Search SO...' }" class="w-full" :ui="adminSelectUi" />
-            </UFormField>
-
-            <UFormField label="Filter Invoice" name="filter-invoice" :ui="adminFieldUi">
-              <USelectMenu v-model="invoiceFilter" :items="invoiceFilterOptions" value-key="value" label-key="label" color="neutral" variant="outline" :search-input="{ placeholder: 'Search invoice...' }" class="w-full" :ui="adminSelectUi" />
-            </UFormField>
-
-            <UFormField label="Filter Ship To" name="filter-ship-to" :ui="adminFieldUi">
-              <USelectMenu v-model="shipToFilter" :items="shipToFilterOptions" value-key="value" label-key="label" color="neutral" variant="outline" :search-input="false" class="w-full" :ui="adminSelectUi" />
-            </UFormField>
-
-            <UFormField label="Created Date" name="created-date-filter" :ui="adminFieldUi">
+            <div class="grid gap-3 xl:grid-cols-7">
               <div class="relative">
                 <UInput
                   :model-value="formatInputDateLabel(createdDateFilter)"
                   readonly
-                  placeholder="เลือกวันที่สร้าง"
+                  aria-label="Created Date"
+                  placeholder="Created Date"
                   color="neutral"
                   variant="outline"
                   class="w-full cursor-pointer"
@@ -864,14 +935,21 @@ onBeforeUnmount(() => {
                   </template>
                 </UPopover>
               </div>
-            </UFormField>
 
-            <UFormField label="Ship Date" name="ship-date-filter" :ui="adminFieldUi">
+              <USelectMenu v-model="groupFilter" :items="groupFilterOptions" value-key="value" label-key="label" aria-label="Group ID" placeholder="All Group ID" color="neutral" variant="outline" :search-input="{ placeholder: 'Search Group ID...' }" class="w-full" :ui="adminSelectUi" />
+
+              <USelectMenu v-model="salesOrderFilter" :items="salesOrderFilterOptions" value-key="value" label-key="label" aria-label="SO" placeholder="All SO" color="neutral" variant="outline" :search-input="{ placeholder: 'Search SO...' }" class="w-full" :ui="adminSelectUi" />
+
+              <USelectMenu v-model="invoiceFilter" :items="invoiceFilterOptions" value-key="value" label-key="label" aria-label="Invoice" placeholder="All Invoice" color="neutral" variant="outline" :search-input="{ placeholder: 'Search invoice...' }" class="w-full" :ui="adminSelectUi" />
+
+              <USelectMenu v-model="shipToFilter" :items="shipToFilterOptions" value-key="value" label-key="label" aria-label="Ship To" placeholder="All Ship To" color="neutral" variant="outline" :search-input="false" class="w-full" :ui="adminSelectUi" />
+
               <div class="relative">
                 <UInput
                   :model-value="formatInputDateLabel(shipDateFilter)"
                   readonly
-                  placeholder="เลือกวันส่ง"
+                  aria-label="Ship Date"
+                  placeholder="Ship Date"
                   color="neutral"
                   variant="outline"
                   class="w-full cursor-pointer"
@@ -893,7 +971,9 @@ onBeforeUnmount(() => {
                   </template>
                 </UPopover>
               </div>
-            </UFormField>
+
+              <USelectMenu v-model="statusFilter" :items="statusFilterOptions" value-key="value" label-key="label" aria-label="State" placeholder="All Status" color="neutral" variant="outline" :search-input="false" class="w-full" :ui="adminSelectUi" />
+            </div>
           </div>
         </div>
 
@@ -914,6 +994,62 @@ onBeforeUnmount(() => {
               <div class="flex justify-center">
                 <UCheckbox :model-value="selectedIds.includes(row.original.id)" @update:model-value="toggleRowSelection(row.original.id, $event)" />
               </div>
+            </template>
+
+            <template #createdAt-header>
+              <UButton color="neutral" variant="ghost" :class="tableHeaderButtonClass" @click="toggleSort('createdAt')">
+                วันที่สร้างใบงาน
+                <UIcon :name="sortIcon('createdAt')" class="size-3.5" />
+              </UButton>
+            </template>
+
+            <template #batchRef-header>
+              <UButton color="neutral" variant="ghost" :class="tableHeaderButtonClass" @click="toggleSort('batchRef')">
+                Group ID
+                <UIcon :name="sortIcon('batchRef')" class="size-3.5" />
+              </UButton>
+            </template>
+
+            <template #jobRef-header>
+              <UButton color="neutral" variant="ghost" :class="tableHeaderButtonClass" @click="toggleSort('jobRef')">
+                Job ID
+                <UIcon :name="sortIcon('jobRef')" class="size-3.5" />
+              </UButton>
+            </template>
+
+            <template #salesOrderNumber-header>
+              <UButton color="neutral" variant="ghost" :class="tableHeaderButtonClass" @click="toggleSort('salesOrderNumber')">
+                SO
+                <UIcon :name="sortIcon('salesOrderNumber')" class="size-3.5" />
+              </UButton>
+            </template>
+
+            <template #invoiceNumber-header>
+              <UButton color="neutral" variant="ghost" :class="tableHeaderButtonClass" @click="toggleSort('invoiceNumber')">
+                Invoice
+                <UIcon :name="sortIcon('invoiceNumber')" class="size-3.5" />
+              </UButton>
+            </template>
+
+            <template #shipTo-header>
+              <UButton color="neutral" variant="ghost" :class="tableHeaderButtonClass" @click="toggleSort('shipTo')">
+                Ship To
+                <UIcon :name="sortIcon('shipTo')" class="size-3.5" />
+              </UButton>
+            </template>
+
+            <template #plannedDeliveryDate-header>
+              <UButton color="neutral" variant="ghost" :class="tableHeaderButtonClass" @click="toggleSort('plannedDeliveryDate')">
+                Ship Date
+                <UIcon :name="sortIcon('plannedDeliveryDate')" class="size-3.5" />
+              </UButton>
+            </template>
+
+            <template #viewState-header>
+              <UButton color="neutral" variant="ghost" :class="tableHeaderButtonClass" @click="toggleSort('viewState')">
+                State
+                <UIcon :name="sortIcon('viewState')" class="size-3.5" />
+              </UButton>
             </template>
 
             <template #batchRef-cell="{ row }">
@@ -947,8 +1083,25 @@ onBeforeUnmount(() => {
         </div>
 
         <div class="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div :class="['text-sm font-medium', bodyTextClass]">
-            เลือกอยู่ {{ selectedCount }} รายการ • แสดง {{ paginatedRows.length }} จาก {{ filteredRows.length }} รายการ
+          <div class="flex flex-wrap items-center gap-3">
+            <div :class="['text-sm font-medium', bodyTextClass]">
+              เลือกอยู่ {{ selectedCount }} รายการ • แสดง {{ paginatedRows.length }} จาก {{ filteredRows.length }} รายการ
+            </div>
+            <div class="flex items-center gap-2">
+              <span :class="['text-sm font-semibold', bodyTextClass]">รายการต่อหน้า</span>
+              <USelectMenu
+                :model-value="pageSize"
+                :items="pageSizeOptions"
+                value-key="value"
+                label-key="label"
+                color="neutral"
+                variant="outline"
+                :search-input="false"
+                class="w-32"
+                :ui="adminSelectUi"
+                @update:model-value="updatePageSize"
+              />
+            </div>
           </div>
 
           <UPagination

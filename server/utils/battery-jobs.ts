@@ -409,7 +409,7 @@ export function isSameCalendarDay(left: Date, right: Date) {
     && left.getDate() === right.getDate()
 }
 
-export function getScanDecision(job: Record<string, any> | null, now = new Date()) {
+export function getScanDecision(job: Record<string, any> | null) {
   if (!job) {
     return {
       found: false,
@@ -420,18 +420,15 @@ export function getScanDecision(job: Record<string, any> | null, now = new Date(
   }
 
   const recommendedPhase = getRecommendedPhase(job)
-  const openedAt = job.openedAt ?? job.workStartedAt ?? null
-  const openedAtDate = openedAt ? new Date(openedAt) : null
   const completed = isBatteryJobFullyCompleted(job)
   const locked = isBatteryJobLocked(job)
-  const expired = openedAtDate ? !isSameCalendarDay(openedAtDate, now) : false
 
-  if (completed || locked || expired) {
+  if (completed || locked) {
     return {
       found: true,
       action: 'OPEN_NEW_BEFORE_CHARGE' as BatteryJobScanAction,
       recommendedPhase: 'BEFORE_CHARGE' as BatteryJobPhaseValue,
-      reason: completed || locked ? 'ALL_PHASES_COMPLETED' : 'JOB_EXPIRED',
+      reason: 'ALL_PHASES_COMPLETED',
     }
   }
 
