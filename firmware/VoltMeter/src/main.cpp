@@ -32,10 +32,13 @@ const char* PREF_ADC_GAIN_KEY = "adc_gain";
 const char* PREF_ADC_OFFSET_KEY = "adc_off";
 const char* PREF_INA_GAIN_KEY = "ina_gain";
 const char* PREF_INA_OFFSET_KEY = "ina_off";
+const char* PREF_INA228_GAIN_KEY = "ina228_g";
+const char* PREF_INA228_OFFSET_KEY = "ina228_o";
 const char* PREF_DISPLAY_BRIGHTNESS_KEY = "disp_br";
 const char* PREF_BOOT_SELFTEST_KEY = "boot_st";
 const char* PREF_ZERO_CLAMP_KEY = "zero_cl";
 const char* PREF_ACTION_BUTTON_PIN_KEY = "btn_pin";
+const char* PREF_VOLTAGE_SOURCE_KEY = "vsrc";
 
 const uint8_t KEYBOARD_REPORT_ID = 0x01;
 const uint8_t KEY_MOD_NONE = 0x00;
@@ -86,6 +89,14 @@ const uint8_t INA226_REG_DIE_ID = 0xFF;
 const uint16_t INA226_EXPECTED_MANUFACTURER_ID = 0x5449;
 const uint16_t INA226_EXPECTED_DIE_ID = 0x2260;
 const uint16_t INA226_CONFIG_DEFAULT = 0x4527;
+
+const uint8_t INA228_I2C_ADDRESS = 0x44;
+const uint8_t INA228_REG_BUS_VOLTAGE = 0x05;
+const uint8_t INA228_REG_MANUFACTURER_ID = 0x3E;
+const uint8_t INA228_REG_DEVICE_ID = 0x3F;
+const uint16_t INA228_EXPECTED_MANUFACTURER_ID = 0x5449;
+const uint16_t INA228_EXPECTED_DEVICE_ID = 0x2281;
+const float INA228_BUS_VOLTAGE_LSB = 0.0001953125f;
 
 constexpr int NUM_RGB_LEDS = 1;
 CRGB rgbLeds[NUM_RGB_LEDS];
@@ -153,6 +164,12 @@ enum RuntimeMode {
   RUNTIME_MODE_CALIBRATION = 2,
 };
 
+enum VoltageSource {
+  VOLTAGE_SOURCE_INA226 = 0,
+  VOLTAGE_SOURCE_INA228 = 1,
+  VOLTAGE_SOURCE_AVERAGE = 2,
+};
+
 float sampleBuffer[SAMPLE_WINDOW];
 int sampleIndex = 0;
 int sampleCount = 0;
@@ -170,6 +187,8 @@ float adcGain = DEFAULT_ADC_GAIN;
 float adcOffset = DEFAULT_ADC_OFFSET;
 float inaGain = DEFAULT_INA_GAIN;
 float inaOffset = DEFAULT_INA_OFFSET;
+float ina228Gain = 1.0f;
+float ina228Offset = 0.0f;
 int stableHits = 0;
 bool isStable = false;
 unsigned long lastSampleAt = 0;
@@ -255,14 +274,25 @@ BLECharacteristic* voltMeterStatusCharacteristic = nullptr;
 BLECharacteristic* voltMeterCalibrationCharacteristic = nullptr;
 
 bool ina226Available = false;
+bool ina228Available = false;
 bool bootSelfTestPassed = false;
 bool bootSelfTestEnabled = DEFAULT_BOOT_SELFTEST_ENABLED;
-float lastInaBusVoltage = 0.0f;
+float lastIna226BusVoltage = NAN;
+float lastIna228BusVoltage = NAN;
+float lastIna226CalibratedVoltage = NAN;
+float lastIna228CalibratedVoltage = NAN;
+float lastSelectedInaBusVoltage = NAN;
+float lastSelectedCalibratedVoltage = NAN;
 uint16_t ina226ManufacturerId = 0;
 uint16_t ina226DieId = 0;
+uint16_t ina228ManufacturerId = 0;
+uint16_t ina228DeviceId = 0;
+uint8_t i2cDeviceCount = 0;
+String i2cDetectedAddresses = "not scanned";
 uint8_t displayBrightness = DEFAULT_DISPLAY_BRIGHTNESS;
 float zeroClampThreshold = DEFAULT_ZERO_CLAMP_THRESHOLD;
 int actionButtonPin = DEFAULT_ACTION_BUTTON_PIN;
+VoltageSource voltageSource = VOLTAGE_SOURCE_INA226;
 
 struct BootSelfTestResult {
   bool rgbOk = false;
@@ -351,6 +381,19 @@ bool readIna226Register(uint8_t reg, uint16_t& value);
 bool writeIna226Register(uint8_t reg, uint16_t value);
 bool initIna226();
 float readIna226BusVoltage();
+bool readIna228Register16(uint8_t reg, uint16_t& value);
+bool readIna228Register24(uint8_t reg, uint32_t& value);
+bool initIna228();
+float readIna228BusVoltage();
+void refreshInaMonitorAvailability();
+const char* voltageSourceName(VoltageSource source);
+float selectedInaBusVoltage();
+void loadVoltageSource();
+void saveVoltageSource(VoltageSource source);
+void setVoltageSource(VoltageSource source);
+void printInaComparison();
+void scanI2cBus();
+void printI2cStatus();
 void buzz(unsigned long durationMs);
 void selfTestStep(const __FlashStringHelper* label, const CRGB& color, unsigned long holdMs = SELF_TEST_STEP_GAP_MS);
 void selfTestPassTone();
@@ -363,6 +406,8 @@ bool isInaOffsetValid(float value);
 void loadInaCalibration();
 void saveInaCalibration(float gain, float offset);
 float applyInaCalibration(float voltage);
+void saveIna228Calibration(float gain, float offset);
+float applyIna228Calibration(float voltage);
 float applyZeroClamp(float voltage);
 String buildBleVoltMeterStatusPayload();
 void updateBleVoltMeterStatusCharacteristic(bool notify = false);
@@ -965,7 +1010,7 @@ bool initIna226() {
     Serial.println(ina226DieId, HEX);
   }
 
-  lastInaBusVoltage = readIna226BusVoltage();
+  lastIna226BusVoltage = readIna226BusVoltage();
   return true;
 }
 
@@ -978,18 +1023,317 @@ float readIna226BusVoltage() {
   return static_cast<float>(rawBusVoltage) * 0.00125f;
 }
 
+bool readIna228Register16(uint8_t reg, uint16_t& value) {
+  Wire.beginTransmission(INA228_I2C_ADDRESS);
+  Wire.write(reg);
+  if (Wire.endTransmission(false) != 0) {
+    return false;
+  }
+
+  if (Wire.requestFrom(INA228_I2C_ADDRESS, static_cast<uint8_t>(2)) != 2) {
+    return false;
+  }
+
+  value = (static_cast<uint16_t>(Wire.read()) << 8) | static_cast<uint16_t>(Wire.read());
+  return true;
+}
+
+bool readIna228Register24(uint8_t reg, uint32_t& value) {
+  Wire.beginTransmission(INA228_I2C_ADDRESS);
+  Wire.write(reg);
+  if (Wire.endTransmission(false) != 0) {
+    return false;
+  }
+
+  if (Wire.requestFrom(INA228_I2C_ADDRESS, static_cast<uint8_t>(3)) != 3) {
+    return false;
+  }
+
+  value = (static_cast<uint32_t>(Wire.read()) << 16)
+    | (static_cast<uint32_t>(Wire.read()) << 8)
+    | static_cast<uint32_t>(Wire.read());
+  return true;
+}
+
+bool initIna228() {
+  if (!readIna228Register16(INA228_REG_MANUFACTURER_ID, ina228ManufacturerId)) {
+    return false;
+  }
+
+  if (!readIna228Register16(INA228_REG_DEVICE_ID, ina228DeviceId)) {
+    return false;
+  }
+
+  if (ina228ManufacturerId != INA228_EXPECTED_MANUFACTURER_ID || ina228DeviceId != INA228_EXPECTED_DEVICE_ID) {
+    Serial.print("[INA228] unexpected ids mfg=0x");
+    Serial.print(ina228ManufacturerId, HEX);
+    Serial.print(" device=0x");
+    Serial.println(ina228DeviceId, HEX);
+  }
+
+  lastIna228BusVoltage = readIna228BusVoltage();
+  return true;
+}
+
+float readIna228BusVoltage() {
+  uint32_t rawBusVoltage = 0;
+  if (!readIna228Register24(INA228_REG_BUS_VOLTAGE, rawBusVoltage)) {
+    return NAN;
+  }
+
+  return static_cast<float>(rawBusVoltage >> 4) * INA228_BUS_VOLTAGE_LSB;
+}
+
+const char* voltageSourceName(VoltageSource source) {
+  if (source == VOLTAGE_SOURCE_INA228) {
+    return "ina228";
+  }
+
+  if (source == VOLTAGE_SOURCE_AVERAGE) {
+    return "average";
+  }
+
+  return "ina226";
+}
+
+float selectedInaBusVoltage() {
+  if (voltageSource == VOLTAGE_SOURCE_INA228) {
+    return lastIna228BusVoltage;
+  }
+
+  if (voltageSource == VOLTAGE_SOURCE_AVERAGE) {
+    if (isnan(lastIna226BusVoltage) || isnan(lastIna228BusVoltage)) {
+      return NAN;
+    }
+
+    return (lastIna226BusVoltage + lastIna228BusVoltage) / 2.0f;
+  }
+
+  return lastIna226BusVoltage;
+}
+
+float selectedCalibratedInaVoltage() {
+  if (voltageSource == VOLTAGE_SOURCE_INA228) {
+    return lastIna228CalibratedVoltage;
+  }
+
+  if (voltageSource == VOLTAGE_SOURCE_AVERAGE) {
+    if (isnan(lastIna226CalibratedVoltage) || isnan(lastIna228CalibratedVoltage)) {
+      return NAN;
+    }
+
+    return (lastIna226CalibratedVoltage + lastIna228CalibratedVoltage) / 2.0f;
+  }
+
+  return lastIna226CalibratedVoltage;
+}
+
+void loadVoltageSource() {
+  preferences.begin(PREF_NAMESPACE, true);
+  const uint8_t storedSource = preferences.getUChar(PREF_VOLTAGE_SOURCE_KEY, VOLTAGE_SOURCE_INA226);
+  preferences.end();
+
+  voltageSource = storedSource <= VOLTAGE_SOURCE_AVERAGE
+    ? static_cast<VoltageSource>(storedSource)
+    : VOLTAGE_SOURCE_INA226;
+}
+
+void saveVoltageSource(VoltageSource source) {
+  voltageSource = source;
+  preferences.begin(PREF_NAMESPACE, false);
+  preferences.putUChar(PREF_VOLTAGE_SOURCE_KEY, static_cast<uint8_t>(voltageSource));
+  preferences.end();
+}
+
+void setVoltageSource(VoltageSource source) {
+  saveVoltageSource(source);
+  resetMeasurementState();
+  lastDisplayVoltage = NAN;
+  displayHoldActive = false;
+  measurementPayload = buildMeasurementPayload();
+  Serial.print("[SOURCE] voltage source set to ");
+  Serial.println(voltageSourceName(voltageSource));
+}
+
+void scanI2cBus() {
+  i2cDeviceCount = 0;
+  i2cDetectedAddresses = "";
+
+  for (uint8_t address = 0x08; address <= 0x77; address += 1) {
+    Wire.beginTransmission(address);
+    if (Wire.endTransmission() != 0) {
+      continue;
+    }
+
+    if (!i2cDetectedAddresses.isEmpty()) {
+      i2cDetectedAddresses += ", ";
+    }
+
+    char addressText[5];
+    snprintf(addressText, sizeof(addressText), "0x%02X", address);
+    i2cDetectedAddresses += addressText;
+    i2cDeviceCount += 1;
+  }
+
+  if (i2cDetectedAddresses.isEmpty()) {
+    i2cDetectedAddresses = "none";
+  }
+
+  Serial.print("[I2C] scan found ");
+  Serial.print(i2cDeviceCount);
+  Serial.print(" device(s): ");
+  Serial.println(i2cDetectedAddresses);
+}
+
+void refreshInaMonitorAvailability() {
+  ina226Available = initIna226();
+  ina228Available = initIna228();
+
+  if (ina226Available) {
+    Serial.print("[INA226] ready @ 0x");
+    Serial.print(INA226_I2C_ADDRESS, HEX);
+    Serial.print(", bus voltage = ");
+    printRoundedVoltage(lastIna226BusVoltage);
+    Serial.println(" V");
+  } else {
+    Serial.println("[INA226] not detected");
+  }
+
+  if (ina228Available) {
+    Serial.print("[INA228] ready @ 0x");
+    Serial.print(INA228_I2C_ADDRESS, HEX);
+    Serial.print(", bus voltage = ");
+    printRoundedVoltage(lastIna228BusVoltage);
+    Serial.println(" V");
+  } else {
+    Serial.println("[INA228] not detected");
+  }
+}
+
+void printInaComparison() {
+  Serial.println();
+  Serial.println("[INA VOLTAGE COMPARISON]");
+  Serial.print("  Selected source       : ");
+  Serial.println(voltageSourceName(voltageSource));
+  Serial.print("  INA226 raw (0x40)    : ");
+  if (isnan(lastIna226BusVoltage)) {
+    Serial.println("unavailable");
+  } else {
+    printRoundedVoltage(lastIna226BusVoltage);
+    Serial.println(" V");
+  }
+  Serial.print("  INA226 calibrated     : ");
+  if (isnan(lastIna226CalibratedVoltage)) {
+    Serial.println("unavailable");
+  } else {
+    printRoundedVoltage(lastIna226CalibratedVoltage);
+    Serial.println(" V");
+  }
+  Serial.print("  INA228 raw (0x44)    : ");
+  if (isnan(lastIna228BusVoltage)) {
+    Serial.println("unavailable");
+  } else {
+    printRoundedVoltage(lastIna228BusVoltage);
+    Serial.println(" V");
+  }
+  Serial.print("  INA228 calibrated     : ");
+  if (isnan(lastIna228CalibratedVoltage)) {
+    Serial.println("unavailable");
+  } else {
+    printRoundedVoltage(lastIna228CalibratedVoltage);
+    Serial.println(" V");
+  }
+  Serial.print("  Selected raw voltage  : ");
+  if (isnan(lastSelectedInaBusVoltage)) {
+    Serial.println("unavailable");
+  } else {
+    printRoundedVoltage(lastSelectedInaBusVoltage);
+    Serial.println(" V");
+  }
+  Serial.print("  Output after cal.     : ");
+  if (isnan(lastSelectedCalibratedVoltage)) {
+    Serial.println("unavailable");
+  } else {
+    printRoundedVoltage(lastSelectedCalibratedVoltage);
+    Serial.println(" V");
+  }
+  if (!isnan(lastIna226BusVoltage) && !isnan(lastIna228BusVoltage)) {
+    Serial.print("  Difference (226-228)  : ");
+    Serial.print(lastIna226BusVoltage - lastIna228BusVoltage, 5);
+    Serial.println(" V");
+  }
+}
+
+void printInaCalibrationTable() {
+  Serial.println();
+  Serial.println("[INA CALIBRATION TABLE]");
+  Serial.println("  INA226 (0x40)");
+  Serial.print("    Gain                : ");
+  Serial.println(inaGain, 5);
+  Serial.print("    Offset              : ");
+  Serial.println(inaOffset, 5);
+  Serial.println("  INA228 (0x44)");
+  Serial.print("    Gain                : ");
+  Serial.println(ina228Gain, 5);
+  Serial.print("    Offset              : ");
+  Serial.println(ina228Offset, 5);
+  Serial.println("  Legacy BLE fields     : ina_gain / ina_offset = INA226");
+}
+
+void printI2cStatus() {
+  Serial.println();
+  Serial.println("[I2C BUS]");
+  Serial.print("  SDA pin               : GPIO ");
+  Serial.println(I2C_SDA_PIN);
+  Serial.print("  SCL pin               : GPIO ");
+  Serial.println(I2C_SCL_PIN);
+  Serial.println("  Clock                 : 400 kHz");
+  Serial.print("  Devices found         : ");
+  Serial.println(i2cDeviceCount);
+  Serial.print("  Detected addresses    : ");
+  Serial.println(i2cDetectedAddresses);
+  Serial.println();
+  Serial.println("  INA226");
+  Serial.print("    Address             : 0x");
+  Serial.println(INA226_I2C_ADDRESS, HEX);
+  Serial.print("    Available           : ");
+  Serial.println(ina226Available ? "true" : "false");
+  Serial.print("    Manufacturer ID     : 0x");
+  Serial.println(ina226ManufacturerId, HEX);
+  Serial.print("    Device ID           : 0x");
+  Serial.println(ina226DieId, HEX);
+  Serial.println();
+  Serial.println("  INA228");
+  Serial.print("    Address             : 0x");
+  Serial.println(INA228_I2C_ADDRESS, HEX);
+  Serial.print("    Available           : ");
+  Serial.println(ina228Available ? "true" : "false");
+  Serial.print("    Manufacturer ID     : 0x");
+  Serial.println(ina228ManufacturerId, HEX);
+  Serial.print("    Device ID           : 0x");
+  Serial.println(ina228DeviceId, HEX);
+}
+
 void loadInaCalibration() {
   preferences.begin(PREF_NAMESPACE, true);
   const float savedInaGain = preferences.getFloat(PREF_INA_GAIN_KEY, DEFAULT_INA_GAIN);
   const float savedInaOffset = preferences.getFloat(PREF_INA_OFFSET_KEY, DEFAULT_INA_OFFSET);
+  const float savedIna228Gain = preferences.getFloat(PREF_INA228_GAIN_KEY, 1.0f);
+  const float savedIna228Offset = preferences.getFloat(PREF_INA228_OFFSET_KEY, 0.0f);
   preferences.end();
 
   inaGain = isInaGainValid(savedInaGain) ? savedInaGain : DEFAULT_INA_GAIN;
   inaOffset = isInaOffsetValid(savedInaOffset) ? savedInaOffset : DEFAULT_INA_OFFSET;
-  Serial.print("[CAL] ina gain = ");
+  ina228Gain = isInaGainValid(savedIna228Gain) ? savedIna228Gain : 1.0f;
+  ina228Offset = isInaOffsetValid(savedIna228Offset) ? savedIna228Offset : 0.0f;
+  Serial.print("[CAL] INA226 gain = ");
   Serial.println(inaGain, 5);
-  Serial.print("[CAL] ina offset = ");
+  Serial.print("[CAL] INA226 offset = ");
   Serial.println(inaOffset, 5);
+  Serial.print("[CAL] INA228 gain = ");
+  Serial.println(ina228Gain, 5);
+  Serial.print("[CAL] INA228 offset = ");
+  Serial.println(ina228Offset, 5);
 }
 
 void saveInaCalibration(float gain, float offset) {
@@ -1009,6 +1353,23 @@ float applyInaCalibration(float voltage) {
   return (voltage * inaGain) + inaOffset;
 }
 
+void saveIna228Calibration(float gain, float offset) {
+  if (!isInaGainValid(gain) || !isInaOffsetValid(offset)) {
+    return;
+  }
+
+  ina228Gain = gain;
+  ina228Offset = offset;
+  preferences.begin(PREF_NAMESPACE, false);
+  preferences.putFloat(PREF_INA228_GAIN_KEY, ina228Gain);
+  preferences.putFloat(PREF_INA228_OFFSET_KEY, ina228Offset);
+  preferences.end();
+}
+
+float applyIna228Calibration(float voltage) {
+  return (voltage * ina228Gain) + ina228Offset;
+}
+
 float applyZeroClamp(float voltage) {
   if (isnan(voltage)) {
     return voltage;
@@ -1022,8 +1383,14 @@ String buildBleVoltMeterStatusPayload() {
   doc["device_id"] = deviceId;
   doc["device_name"] = bleDeviceName;
   doc["fw"] = FIRMWARE_VERSION;
+  // Keep these legacy fields as the INA226 calibration for existing clients.
   doc["ina_gain"] = inaGain;
   doc["ina_offset"] = inaOffset;
+  doc["ina226_gain"] = inaGain;
+  doc["ina226_offset"] = inaOffset;
+  doc["ina228_gain"] = ina228Gain;
+  doc["ina228_offset"] = ina228Offset;
+  doc["voltage_source"] = voltageSourceName(voltageSource);
   doc["voltage"] = lastAverageVoltage;
   doc["stable"] = isStable;
   doc["ble_connected"] = bleClientConnected;
@@ -1358,35 +1725,51 @@ float readBatteryVoltage() {
     lastAdcVoltageFromRaw = 0.0f;
     lastAdcVoltageFromMilliVolts = 0.0f;
     lastAdcVoltageCorrected = 0.0f;
+    lastIna226BusVoltage = NAN;
+    lastIna228BusVoltage = NAN;
+    lastIna226CalibratedVoltage = NAN;
+    lastIna228CalibratedVoltage = NAN;
+    lastSelectedInaBusVoltage = NAN;
+    lastSelectedCalibratedVoltage = NAN;
     return MOCK_VOLTAGE_BASE + (wave * MOCK_VOLTAGE_SWING);
   }
 
-  if (!ina226Available) {
+  if (!ina226Available && !ina228Available) {
     lastAdcRaw = 0;
     lastAdcMilliVolts = 0;
     lastAdcVoltageFromRaw = 0.0f;
     lastAdcVoltageFromMilliVolts = 0.0f;
     lastAdcVoltageCorrected = 0.0f;
+    lastIna226BusVoltage = NAN;
+    lastIna228BusVoltage = NAN;
+    lastIna226CalibratedVoltage = NAN;
+    lastIna228CalibratedVoltage = NAN;
+    lastSelectedInaBusVoltage = NAN;
+    lastSelectedCalibratedVoltage = NAN;
     return NAN;
   }
 
-  const float rawBusVoltage = readIna226BusVoltage();
-  if (isnan(rawBusVoltage)) {
+  lastIna226BusVoltage = ina226Available ? readIna226BusVoltage() : NAN;
+  lastIna228BusVoltage = ina228Available ? readIna228BusVoltage() : NAN;
+  lastIna226CalibratedVoltage = isnan(lastIna226BusVoltage) ? NAN : applyInaCalibration(lastIna226BusVoltage);
+  lastIna228CalibratedVoltage = isnan(lastIna228BusVoltage) ? NAN : applyIna228Calibration(lastIna228BusVoltage);
+  lastSelectedInaBusVoltage = selectedInaBusVoltage();
+  lastSelectedCalibratedVoltage = selectedCalibratedInaVoltage();
+  if (isnan(lastSelectedCalibratedVoltage)) {
     return NAN;
   }
 
-  const float calibratedBusVoltage = applyZeroClamp(applyInaCalibration(rawBusVoltage));
+  const float calibratedBusVoltage = applyZeroClamp(lastSelectedCalibratedVoltage);
   const float activeMeasurementThreshold = zeroClampThreshold > MIN_ACTIVE_MEASUREMENT_VOLTAGE
     ? zeroClampThreshold
     : MIN_ACTIVE_MEASUREMENT_VOLTAGE;
   const float normalizedBusVoltage = fabsf(calibratedBusVoltage) < activeMeasurementThreshold
     ? 0.0f
     : calibratedBusVoltage;
-  lastInaBusVoltage = rawBusVoltage;
   lastAdcRaw = 0;
   lastAdcMilliVolts = static_cast<int>(normalizedBusVoltage * 1000.0f);
   lastAdcVoltageFromRaw = 0.0f;
-  lastAdcVoltageFromMilliVolts = rawBusVoltage;
+  lastAdcVoltageFromMilliVolts = lastSelectedInaBusVoltage;
   lastAdcVoltageCorrected = normalizedBusVoltage;
   return normalizedBusVoltage;
 }
@@ -1670,6 +2053,20 @@ String buildStatusPayload() {
   doc["adc_offset"] = adcOffset;
   doc["ina_gain"] = inaGain;
   doc["ina_offset"] = inaOffset;
+  doc["ina226_gain"] = inaGain;
+  doc["ina226_offset"] = inaOffset;
+  doc["ina228_gain"] = ina228Gain;
+  doc["ina228_offset"] = ina228Offset;
+  doc["i2c_sda_pin"] = I2C_SDA_PIN;
+  doc["i2c_scl_pin"] = I2C_SCL_PIN;
+  doc["i2c_clock_hz"] = 400000;
+  doc["i2c_detected_count"] = i2cDeviceCount;
+  doc["i2c_detected_addresses"] = i2cDetectedAddresses;
+  doc["ina226_address"] = INA226_I2C_ADDRESS;
+  doc["ina226_available"] = ina226Available;
+  doc["ina228_address"] = INA228_I2C_ADDRESS;
+  doc["ina228_available"] = ina228Available;
+  doc["voltage_source"] = voltageSourceName(voltageSource);
   doc["voltage_offset"] = VOLTAGE_OFFSET;
   doc["adc_raw"] = lastAdcRaw;
   doc["adc_mv"] = lastAdcMilliVolts;
@@ -1734,8 +2131,10 @@ void handleCalibrationUpdate() {
   const String offsetArg = server.arg("adc_offset");
   const String inaGainArg = server.arg("ina_gain");
   const String inaOffsetArg = server.arg("ina_offset");
+  const String ina228GainArg = server.arg("ina228_gain");
+  const String ina228OffsetArg = server.arg("ina228_offset");
 
-  if (ratioArg.isEmpty() && gainArg.isEmpty() && offsetArg.isEmpty() && inaGainArg.isEmpty() && inaOffsetArg.isEmpty()) {
+  if (ratioArg.isEmpty() && gainArg.isEmpty() && offsetArg.isEmpty() && inaGainArg.isEmpty() && inaOffsetArg.isEmpty() && ina228GainArg.isEmpty() && ina228OffsetArg.isEmpty()) {
     server.send(400, "application/json", "{\"ok\":false,\"error\":\"calibration_required\"}");
     return;
   }
@@ -1745,6 +2144,8 @@ void handleCalibrationUpdate() {
   float nextOffset = adcOffset;
   float nextInaGain = inaGain;
   float nextInaOffset = inaOffset;
+  float nextIna228Gain = ina228Gain;
+  float nextIna228Offset = ina228Offset;
 
   if (!ratioArg.isEmpty()) {
     nextRatio = ratioArg.toFloat();
@@ -1766,7 +2167,15 @@ void handleCalibrationUpdate() {
     nextInaOffset = inaOffsetArg.toFloat();
   }
 
-  if (!isDividerRatioValid(nextRatio) || !isAdcGainValid(nextGain) || !isAdcOffsetValid(nextOffset) || !isInaGainValid(nextInaGain) || !isInaOffsetValid(nextInaOffset)) {
+  if (!ina228GainArg.isEmpty()) {
+    nextIna228Gain = ina228GainArg.toFloat();
+  }
+
+  if (!ina228OffsetArg.isEmpty()) {
+    nextIna228Offset = ina228OffsetArg.toFloat();
+  }
+
+  if (!isDividerRatioValid(nextRatio) || !isAdcGainValid(nextGain) || !isAdcOffsetValid(nextOffset) || !isInaGainValid(nextInaGain) || !isInaOffsetValid(nextInaOffset) || !isInaGainValid(nextIna228Gain) || !isInaOffsetValid(nextIna228Offset)) {
     server.send(400, "application/json", "{\"ok\":false,\"error\":\"invalid_calibration\"}");
     return;
   }
@@ -1774,6 +2183,7 @@ void handleCalibrationUpdate() {
   saveDividerRatio(nextRatio);
   saveAdcCalibration(nextGain, nextOffset);
   saveInaCalibration(nextInaGain, nextInaOffset);
+  saveIna228Calibration(nextIna228Gain, nextIna228Offset);
   resetMeasurementState();
   measurementPayload = buildMeasurementPayload();
 
@@ -1784,6 +2194,10 @@ void handleCalibrationUpdate() {
   doc["adc_offset"] = adcOffset;
   doc["ina_gain"] = inaGain;
   doc["ina_offset"] = inaOffset;
+  doc["ina226_gain"] = inaGain;
+  doc["ina226_offset"] = inaOffset;
+  doc["ina228_gain"] = ina228Gain;
+  doc["ina228_offset"] = ina228Offset;
 
   String payload;
   serializeJson(doc, payload);
@@ -1795,10 +2209,14 @@ void handleCalibrationUpdate() {
   Serial.println(adcGain, 4);
   Serial.print("[CAL] adc offset updated via http: ");
   Serial.println(adcOffset, 4);
-  Serial.print("[CAL] ina gain updated via http: ");
+  Serial.print("[CAL] INA226 gain updated via http: ");
   Serial.println(inaGain, 5);
-  Serial.print("[CAL] ina offset updated via http: ");
+  Serial.print("[CAL] INA226 offset updated via http: ");
   Serial.println(inaOffset, 5);
+  Serial.print("[CAL] INA228 gain updated via http: ");
+  Serial.println(ina228Gain, 5);
+  Serial.print("[CAL] INA228 offset updated via http: ");
+  Serial.println(ina228Offset, 5);
 }
 
 void handleAutoCalibration() {
@@ -1927,8 +2345,10 @@ void handleRoot() {
   html += "<label>Divider ratio <input type='number' name='ratio' step='0.001' min='0.1' max='50' value='" + String(dividerRatio, 3) + "'></label>";
   html += "<br><label>ADC gain <input type='number' name='adc_gain' step='0.0001' min='0.1' max='10' value='" + String(adcGain, 4) + "'></label>";
   html += "<br><label>ADC offset <input type='number' name='adc_offset' step='0.0001' min='-2' max='2' value='" + String(adcOffset, 4) + "'></label>";
-  html += "<br><label>INA gain <input type='number' name='ina_gain' step='0.00001' min='0.8' max='1.2' value='" + String(inaGain, 5) + "'></label>";
-  html += "<br><label>INA offset <input type='number' name='ina_offset' step='0.00001' min='-1' max='1' value='" + String(inaOffset, 5) + "'></label>";
+  html += "<br><label>INA226 gain <input type='number' name='ina_gain' step='0.00001' min='0.8' max='1.2' value='" + String(inaGain, 5) + "'></label>";
+  html += "<br><label>INA226 offset <input type='number' name='ina_offset' step='0.00001' min='-1' max='1' value='" + String(inaOffset, 5) + "'></label>";
+  html += "<br><label>INA228 gain <input type='number' name='ina228_gain' step='0.00001' min='0.8' max='1.2' value='" + String(ina228Gain, 5) + "'></label>";
+  html += "<br><label>INA228 offset <input type='number' name='ina228_offset' step='0.00001' min='-1' max='1' value='" + String(ina228Offset, 5) + "'></label>";
   html += "<button type='submit'>Save Calibration</button></form>";
   html += "<hr><form method='POST' action='/api/calibration/auto'>";
   html += "<p>Guided Auto Calibration</p>";
@@ -2068,25 +2488,53 @@ class BleCalibrationCharacteristicCallbacks : public BLECharacteristicCallbacks 
       return;
     }
 
-    const float nextInaGain = doc["ina_gain"] | NAN;
-    const float nextInaOffset = doc["ina_offset"] | NAN;
+    // The legacy ina_gain/ina_offset pair maps to INA226.
+    const bool hasLegacyIna226Gain = !doc["ina_gain"].isNull();
+    const bool hasLegacyIna226Offset = !doc["ina_offset"].isNull();
+    const bool hasIna226Gain = !doc["ina226_gain"].isNull() || hasLegacyIna226Gain;
+    const bool hasIna226Offset = !doc["ina226_offset"].isNull() || hasLegacyIna226Offset;
+    const bool hasIna228Gain = !doc["ina228_gain"].isNull();
+    const bool hasIna228Offset = !doc["ina228_offset"].isNull();
 
-    if (!isInaGainValid(nextInaGain) || !isInaOffsetValid(nextInaOffset)) {
-      Serial.println("[BLE CAL] rejected invalid gain/offset");
+    if (hasIna226Gain != hasIna226Offset || hasIna228Gain != hasIna228Offset || (!hasIna226Gain && !hasIna228Gain)) {
+      Serial.println("[BLE CAL] send a complete gain/offset pair for INA226 and/or INA228");
       return;
     }
 
-    saveInaCalibration(nextInaGain, nextInaOffset);
+    if (hasIna226Gain) {
+      const float nextIna226Gain = !doc["ina226_gain"].isNull() ? (doc["ina226_gain"] | NAN) : (doc["ina_gain"] | NAN);
+      const float nextIna226Offset = !doc["ina226_offset"].isNull() ? (doc["ina226_offset"] | NAN) : (doc["ina_offset"] | NAN);
+      if (!isInaGainValid(nextIna226Gain) || !isInaOffsetValid(nextIna226Offset)) {
+        Serial.println("[BLE CAL] rejected invalid INA226 gain/offset");
+        return;
+      }
+      saveInaCalibration(nextIna226Gain, nextIna226Offset);
+    }
+
+    if (hasIna228Gain) {
+      const float nextIna228Gain = doc["ina228_gain"] | NAN;
+      const float nextIna228Offset = doc["ina228_offset"] | NAN;
+      if (!isInaGainValid(nextIna228Gain) || !isInaOffsetValid(nextIna228Offset)) {
+        Serial.println("[BLE CAL] rejected invalid INA228 gain/offset");
+        return;
+      }
+      saveIna228Calibration(nextIna228Gain, nextIna228Offset);
+    }
+
     resetMeasurementState();
     measurementPayload = buildMeasurementPayload();
     updateBleVoltMeterStatusCharacteristic(true);
     buzz(50);
     delay(60);
     buzz(50);
-    Serial.print("[BLE CAL] calibration updated via BLE gain=");
+    Serial.print("[BLE CAL] INA226 gain=");
     Serial.print(inaGain, 5);
     Serial.print(" offset=");
     Serial.println(inaOffset, 5);
+    Serial.print("[BLE CAL] INA228 gain=");
+    Serial.print(ina228Gain, 5);
+    Serial.print(" offset=");
+    Serial.println(ina228Offset, 5);
   }
 };
 
@@ -2191,14 +2639,8 @@ void setupAdc() {
 void setupI2cPeripherals() {
   Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
   Wire.setClock(400000);
-  ina226Available = initIna226();
-  if (ina226Available) {
-    Serial.print("[INA226] ready, bus voltage = ");
-    printRoundedVoltage(lastInaBusVoltage);
-    Serial.println(" V");
-  } else {
-    Serial.println("[INA226] not detected");
-  }
+  scanI2cBus();
+  refreshInaMonitorAvailability();
 }
 
 void setupStatusIndicators() {
@@ -2232,7 +2674,7 @@ void runBootSelfTest() {
     if (!isnan(rawBootVoltage)) {
       const float calibratedBootVoltage = applyInaCalibration(rawBootVoltage);
       bootSelfTestResult.busVoltage = calibratedBootVoltage;
-      lastInaBusVoltage = rawBootVoltage;
+      lastIna226BusVoltage = rawBootVoltage;
       Serial.print("[SELFTEST] INA226 bus voltage raw = ");
       printRoundedVoltage(rawBootVoltage);
       Serial.print(" V, calibrated = ");
@@ -2329,10 +2771,16 @@ void printBootInfo() {
   Serial.println(I2C_SDA_PIN);
   Serial.print("[BOOT] I2C_SCL_PIN = ");
   Serial.println(I2C_SCL_PIN);
-  Serial.print("[BOOT] INA_GAIN = ");
+  Serial.print("[BOOT] INA226_GAIN = ");
   Serial.println(inaGain, 5);
-  Serial.print("[BOOT] INA_OFFSET = ");
+  Serial.print("[BOOT] INA226_OFFSET = ");
   Serial.println(inaOffset, 5);
+  Serial.print("[BOOT] INA228_GAIN = ");
+  Serial.println(ina228Gain, 5);
+  Serial.print("[BOOT] INA228_OFFSET = ");
+  Serial.println(ina228Offset, 5);
+  Serial.print("[BOOT] VOLTAGE_SOURCE = ");
+  Serial.println(voltageSourceName(voltageSource));
   Serial.print("[BOOT] USE_MOCK_VOLTAGE = ");
   Serial.println(useMockVoltage ? "true" : "false");
   Serial.print("[BOOT] DIVIDER_RATIO = ");
@@ -2341,7 +2789,7 @@ void printBootInfo() {
   Serial.println(adcGain, 4);
   Serial.print("[BOOT] ADC_OFFSET = ");
   Serial.println(adcOffset, 4);
-  Serial.println("[BOOT] SERIAL_COMMANDS = help / mode / brightness / rgb / mock / lift / selftest / reboot");
+  Serial.println("[BOOT] SERIAL_COMMANDS = help / status / i2c scan / source / calibration / mode / brightness / rgb / mock / lift / selftest / reboot");
   Serial.println("[BOOT] SERIAL_LINE_ENDING = newline or CRLF");
 }
 
@@ -2407,6 +2855,7 @@ void logMeasurementDebug() {
   Serial.print(isStable ? "true" : "false");
   Serial.print("    liveMeasurement: ");
   Serial.println(hasLiveMeasurement() ? "true" : "false");
+  printInaComparison();
 
   if (pendingDebugSamples > 0) {
     pendingDebugSamples -= 1;
@@ -2465,6 +2914,8 @@ void printMeasurementStatus() {
   Serial.println(isActionButtonPressedRaw() ? "true" : "false");
   Serial.print("    mockVoltageEnabled: ");
   Serial.println(useMockVoltage ? "true" : "false");
+  printI2cStatus();
+  printInaComparison();
 }
 
 void printPayloadInfo() {
@@ -2521,20 +2972,20 @@ void printBleInfo() {
     Serial.println("  exit: use serial command hid or mode hid");
   } else {
     Serial.println("  action: short press A1, then release to measure, type voltage, and send Enter");
-    Serial.println("  calibration: use serial command calibrate or mode cal");
+    Serial.println("  calibration: use serial command mode cal or mode calibrate");
   }
 }
 
 void printHelp() {
   Serial.println("[HELP] Commands");
   Serial.println("  Basic");
-  Serial.println("    help | info | status | payload");
+  Serial.println("    help | info | status | payload | i2c scan");
   Serial.println("    wifi | ble");
   Serial.println("  Mode");
   Serial.println("    mode");
   Serial.println("    mode wifi");
   Serial.println("    mode ble   (alias: mode hid, hid)");
-  Serial.println("    mode cal   (alias: calibrate, cal)");
+  Serial.println("    mode cal   (alias: mode calibrate, calibrate, cal)");
   Serial.println("  Display");
   Serial.println("    brightness");
   Serial.println("    brightness <0-7>");
@@ -2547,6 +2998,10 @@ void printHelp() {
   Serial.println("    rgb on | rgb off | rgb test");
   Serial.println("  Measure");
   Serial.println("    send   (capture current voltage and type via BLE HID)");
+  Serial.println("    source | source ina226 | source ina228 | source average");
+  Serial.println("    calibration");
+  Serial.println("    calibration ina226 <gain> <offset>");
+  Serial.println("    calibration ina228 <gain> <offset>");
   Serial.println("    mock on | mock off");
   Serial.println("    lift on | lift off");
   Serial.println("  System");
@@ -2631,7 +3086,7 @@ void printModeInfo() {
   Serial.println("[INFO] Mode");
   Serial.print("  active: ");
   Serial.println(runtimeModeName(activeMode));
-  Serial.println("  switch with: mode wifi | mode ble | mode hid | mode cal | calibrate | hid");
+  Serial.println("  switch with: mode wifi | mode ble | mode hid | mode cal | mode calibrate | hid");
   Serial.println("[OK] mode");
 }
 
@@ -2675,6 +3130,81 @@ void handleSerialCommand(const String& rawCommand) {
     return;
   }
 
+  if (normalizedCommand == "i2c scan") {
+    scanI2cBus();
+    refreshInaMonitorAvailability();
+    printI2cStatus();
+    Serial.println("[OK] i2c scan");
+    return;
+  }
+
+  if (normalizedCommand == "source") {
+    Serial.print("[SOURCE] voltage source = ");
+    Serial.println(voltageSourceName(voltageSource));
+    Serial.println("[OK] source");
+    return;
+  }
+
+  if (normalizedCommand == "source ina226") {
+    setVoltageSource(VOLTAGE_SOURCE_INA226);
+    Serial.println("[OK] source");
+    return;
+  }
+
+  if (normalizedCommand == "source ina228") {
+    setVoltageSource(VOLTAGE_SOURCE_INA228);
+    Serial.println("[OK] source");
+    return;
+  }
+
+  if (normalizedCommand == "source average") {
+    setVoltageSource(VOLTAGE_SOURCE_AVERAGE);
+    Serial.println("[OK] source");
+    return;
+  }
+
+  if (normalizedCommand == "calibration") {
+    printInaCalibrationTable();
+    Serial.println("[OK] calibration");
+    return;
+  }
+
+  if (normalizedCommand.startsWith("calibration ina226 ") || normalizedCommand.startsWith("calibration ina228 ")) {
+    const bool updatingIna228 = normalizedCommand.startsWith("calibration ina228 ");
+    const size_t valuesStart = updatingIna228 ? String("calibration ina228 ").length() : String("calibration ina226 ").length();
+    const String values = normalizedCommand.substring(valuesStart);
+    const int separator = values.indexOf(' ');
+
+    if (separator <= 0 || separator >= static_cast<int>(values.length() - 1)) {
+      Serial.println("[CAL] use: calibration ina226 <gain> <offset>");
+      Serial.println("[CAL] use: calibration ina228 <gain> <offset>");
+      return;
+    }
+
+    const String gainText = values.substring(0, separator);
+    const String offsetText = values.substring(separator + 1);
+    const float nextGain = gainText.toFloat();
+    const float nextOffset = offsetText.toFloat();
+    if (!isInaGainValid(nextGain) || !isInaOffsetValid(nextOffset)) {
+      Serial.println("[CAL] invalid gain or offset");
+      return;
+    }
+
+    if (updatingIna228) {
+      saveIna228Calibration(nextGain, nextOffset);
+      Serial.println("[CAL] INA228 calibration saved");
+    } else {
+      saveInaCalibration(nextGain, nextOffset);
+      Serial.println("[CAL] INA226 calibration saved");
+    }
+
+    resetMeasurementState();
+    measurementPayload = buildMeasurementPayload();
+    printInaCalibrationTable();
+    Serial.println("[OK] calibration");
+    return;
+  }
+
   if (normalizedCommand == "wifi") {
     printWifiInfo();
     Serial.println("[OK] wifi");
@@ -2710,7 +3240,7 @@ void handleSerialCommand(const String& rawCommand) {
     return;
   }
 
-  if (normalizedCommand == "mode cal" || normalizedCommand == "mode calibration" || normalizedCommand == "calibrate" || normalizedCommand == "cal") {
+  if (normalizedCommand == "mode cal" || normalizedCommand == "mode calibrate" || normalizedCommand == "mode calibration" || normalizedCommand == "calibrate" || normalizedCommand == "cal") {
     if (activeMode == RUNTIME_MODE_CALIBRATION) {
       Serial.println("[MODE] already in calibration");
       return;
@@ -3039,6 +3569,7 @@ void setup() {
   loadBootSelfTestEnabled();
   loadZeroClampThreshold();
   loadActionButtonPin();
+  loadVoltageSource();
   loadDividerRatio();
   loadAdcCalibration();
   loadInaCalibration();

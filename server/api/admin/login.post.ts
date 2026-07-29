@@ -1,29 +1,25 @@
-import { isAdminAuthConfigured, setAdminSession, verifyAdminPin } from '../../utils/admin-auth'
+import { prisma } from '../../utils/prisma'
+import { normalizeUsername, setUserSession, validatePin, verifyPin } from '../../utils/user-auth'
 
 interface AdminLoginPayload {
+  username?: string | null
   pin?: string | null
 }
 
 export default defineEventHandler(async (event) => {
-  if (!isAdminAuthConfigured()) {
-    throw createError({
-      statusCode: 503,
-      statusMessage: 'Admin PIN is not configured',
-    })
-  }
-
   const body = await readBody<AdminLoginPayload>(event)
+  const username = normalizeUsername(body.username)
+  const pin = validatePin(body.pin)
+  const account = username
+    ? await prisma.userAccount.findUnique({ where: { username } })
+    : null
 
-  if (!verifyAdminPin(body.pin)) {
-    throw createError({
-      statusCode: 401,
-      statusMessage: 'Invalid admin PIN',
-    })
+  if (!account || !account.active || account.role !== 'ADMIN' || !verifyPin(pin, account.pinHash)) {
+    throw createError({ statusCode: 401, statusMessage: 'Invalid admin username or PIN' })
   }
 
-  setAdminSession(event)
+  await prisma.userAccount.update({ where: { id: account.id }, data: { lastLoginAt: new Date() } })
+  setUserSession(event, account)
 
-  return {
-    ok: true,
-  }
+  return { ok: true }
 })

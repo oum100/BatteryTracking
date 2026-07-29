@@ -8,7 +8,7 @@ interface ChargeProgramPayload {
 }
 
 export default defineEventHandler(async (event) => {
-  requireAdminSession(event)
+  await requireAdminSession(event)
 
   const body = await readBody<ChargeProgramPayload>(event)
   const code = ensureRequiredText(body.code, 'code').toUpperCase()

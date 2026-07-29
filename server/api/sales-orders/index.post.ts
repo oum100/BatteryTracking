@@ -8,7 +8,7 @@ interface SalesOrderPayload {
 }
 
 export default defineEventHandler(async (event) => {
-  requireAdminSession(event)
+  await requireAdminSession(event)
 
   const body = await readBody<SalesOrderPayload>(event)
   const soNumber = ensureRequiredText(body.soNumber, 'soNumber').toUpperCase()

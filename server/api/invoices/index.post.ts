@@ -8,7 +8,7 @@ interface InvoicePayload {
 }
 
 export default defineEventHandler(async (event) => {
-  requireAdminSession(event)
+  await requireAdminSession(event)
 
   const body = await readBody<InvoicePayload>(event)
   const invoiceNo = ensureRequiredText(body.invoiceNo, 'invoiceNo').toUpperCase()

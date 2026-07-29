@@ -1,7 +1,6 @@
-import { isAdminAuthConfigured, isAdminSessionAuthenticated } from '../../utils/admin-auth'
+import { isAdminSessionAuthenticated } from '../../utils/admin-auth'
 
-export default defineEventHandler((event) => ({
+export default defineEventHandler(async (event) => ({
   ok: true,
-  configured: isAdminAuthConfigured(),
-  authenticated: isAdminSessionAuthenticated(event),
+  authenticated: await isAdminSessionAuthenticated(event),
 }))

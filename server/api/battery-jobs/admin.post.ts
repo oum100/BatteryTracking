@@ -21,7 +21,7 @@ interface AdminCreateBatteryJobPayload {
 }
 
 export default defineEventHandler(async (event) => {
-  requireAdminSession(event)
+  await requireAdminSession(event)
 
   const body = await readBody<AdminCreateBatteryJobPayload>(event)
   const requestedRackCount = typeof body.rackCount === 'number'

@@ -7,7 +7,7 @@ interface DeleteBatteryJobPayload {
 }
 
 export default defineEventHandler(async (event) => {
-  requireAdminSession(event)
+  await requireAdminSession(event)
 
   const id = getRouterParam(event, 'id')
 

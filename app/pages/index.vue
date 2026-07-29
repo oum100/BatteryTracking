@@ -17,6 +17,11 @@ const qcWorkspaceLinks = [
     className: 'justify-between rounded-[20px] border border-violet-200 bg-violet-50 px-5 py-4 text-left text-base font-bold text-violet-950 hover:bg-violet-100',
   },
   {
+    label: 'Battery QC Settings',
+    path: '/battery-qc-settings',
+    className: 'justify-between rounded-[20px] border border-sky-200 bg-sky-50 px-5 py-4 text-left text-base font-bold text-sky-950 hover:bg-sky-100',
+  },
+  {
     label: 'Battery QC Summary',
     path: '/qc-report',
     className: 'justify-between rounded-[20px] border border-rose-200 bg-rose-50 px-5 py-4 text-left text-base font-bold text-rose-950 hover:bg-rose-100',
@@ -59,20 +64,6 @@ const historyLinks = [
   },
 ] as const
 
-function getWorkspaceHref(path: string) {
-  if (typeof window === 'undefined') {
-    return path
-  }
-
-  const url = new URL(path, window.location.origin)
-  const isAndroid = /Android/i.test(window.navigator.userAgent)
-
-  if (!isAndroid) {
-    return url.toString()
-  }
-
-  return `intent://${url.host}${url.pathname}${url.search}${url.hash}#Intent;scheme=${url.protocol.replace(':', '')};package=com.android.chrome;end`
-}
 </script>
 
 <template>
@@ -108,8 +99,7 @@ function getWorkspaceHref(path: string) {
               </div>
 
               <UButton
-                :href="getWorkspaceHref(featuredLink.path)"
-                external
+                :to="featuredLink.path"
                 block
                 size="xl"
                 color="neutral"
@@ -130,8 +120,7 @@ function getWorkspaceHref(path: string) {
                 <UButton
                   v-for="link in qcWorkspaceLinks"
                   :key="link.path"
-                  :href="getWorkspaceHref(link.path)"
-                  external
+                  :to="link.path"
                   block
                   size="xl"
                   color="neutral"
@@ -166,8 +155,7 @@ function getWorkspaceHref(path: string) {
                     <UButton
                       v-for="link in operationLinks"
                       :key="link.path"
-                      :href="getWorkspaceHref(link.path)"
-                      external
+                      :to="link.path"
                       block
                       size="xl"
                       color="neutral"
@@ -203,8 +191,7 @@ function getWorkspaceHref(path: string) {
                     <UButton
                       v-for="link in historyLinks"
                       :key="link.path"
-                      :href="getWorkspaceHref(link.path)"
-                      external
+                      :to="link.path"
                       block
                       size="xl"
                       color="neutral"

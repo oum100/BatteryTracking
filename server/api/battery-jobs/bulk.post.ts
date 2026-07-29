@@ -13,7 +13,7 @@ interface BulkPayload {
 }
 
 export default defineEventHandler(async (event) => {
-  requireAdminSession(event)
+  await requireAdminSession(event)
 
   const body = await readBody<BulkPayload>(event)
   const action = String(body.action ?? '').trim().toUpperCase()

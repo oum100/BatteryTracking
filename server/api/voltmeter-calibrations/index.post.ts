@@ -1,8 +1,10 @@
 import { prisma } from '../../utils/prisma'
+import { requireUserRole } from '../../utils/user-auth'
 
 interface CalibrationPayload {
   deviceId?: string
   deviceName?: string | null
+  source?: 'INA226' | 'INA228'
   inaGain?: number
   inaOffset?: number
   pointOneMeter?: number
@@ -36,11 +38,25 @@ function ensureNumber(value: unknown, field: string) {
   return normalized
 }
 
+function ensureSource(value: unknown) {
+  const source = String(value ?? 'INA226').trim().toUpperCase()
+  if (source === 'INA226' || source === 'INA228') {
+    return source
+  }
+
+  throw createError({
+    statusCode: 400,
+    statusMessage: 'source must be INA226 or INA228',
+  })
+}
+
 export default defineEventHandler(async (event) => {
+  await requireUserRole(event, ['ADMIN', 'CALIBRATOR'])
   const body = await readBody<CalibrationPayload>(event)
 
   const deviceId = ensureText(body.deviceId, 'deviceId')
   const deviceName = String(body.deviceName ?? '').trim() || null
+  const source = ensureSource(body.source)
   const inaGain = ensureNumber(body.inaGain, 'inaGain')
   const inaOffset = ensureNumber(body.inaOffset, 'inaOffset')
   const pointOneMeter = ensureNumber(body.pointOneMeter, 'pointOneMeter')
@@ -51,11 +67,15 @@ export default defineEventHandler(async (event) => {
 
   const calibration = await prisma.voltMeterCalibration.upsert({
     where: {
-      deviceId,
+      deviceId_source: {
+        deviceId,
+        source,
+      },
     },
     create: {
       deviceId,
       deviceName,
+      source,
       inaGain,
       inaOffset,
       pointOneMeter,

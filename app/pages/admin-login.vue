@@ -1,9 +1,9 @@
 <script setup lang="ts">
 const route = useRoute()
+const username = ref('')
 const pin = ref('')
 const loading = ref(false)
 const errorMessage = ref('')
-const configured = ref(true)
 const colorMode = useColorMode()
 
 const redirectTarget = computed(() => {
@@ -65,18 +65,46 @@ const errorAlertUi = computed(() => ({
   description: isDarkMode.value ? 'text-sm font-semibold text-rose-100' : 'text-sm font-semibold text-rose-900',
 }))
 
+function getLoginErrorMessage(error: unknown) {
+  const requestError = error as {
+    statusCode?: number
+    response?: { status?: number }
+  }
+  const statusCode = requestError.statusCode ?? requestError.response?.status
+
+  if (statusCode === 401) {
+    return 'Username หรือ PIN ไม่ถูกต้อง'
+  }
+
+  if (statusCode === 400) {
+    return 'กรอก Username และ PIN ให้ถูกต้องก่อนเข้าสู่ระบบ'
+  }
+
+  return 'ไม่สามารถเข้าสู่ระบบได้ กรุณาลองใหม่อีกครั้ง'
+}
+
 async function loadSessionStatus() {
-  const response = await $fetch<{ configured: boolean, authenticated: boolean }>('/api/admin/session')
-  configured.value = response.configured
+  const response = await $fetch<{ authenticated: boolean, user: { role: string } | null }>('/api/auth/session')
 
   if (response.authenticated) {
+    const requiresAdmin = redirectTarget.value === '/battery-qc-admin' || redirectTarget.value === '/battery-qc-settings'
+    if (requiresAdmin && response.user?.role !== 'ADMIN') {
+      errorMessage.value = 'บัญชีนี้ไม่มีสิทธิ์เข้า Admin Workspace'
+      return
+    }
+
     await navigateTo(redirectTarget.value)
   }
 }
 
 async function submitAdminLogin() {
+  if (!username.value.trim()) {
+    errorMessage.value = 'กรอก Username ก่อน'
+    return
+  }
+
   if (!pin.value.trim()) {
-    errorMessage.value = 'กรอก Admin PIN ก่อน'
+    errorMessage.value = 'กรอก PIN ก่อน'
     return
   }
 
@@ -84,9 +112,10 @@ async function submitAdminLogin() {
   errorMessage.value = ''
 
   try {
-    await $fetch('/api/admin/login', {
+    await $fetch('/api/auth/login', {
       method: 'POST',
       body: {
+        username: username.value,
         pin: pin.value,
       },
     })
@@ -94,7 +123,7 @@ async function submitAdminLogin() {
     await navigateTo(redirectTarget.value)
   }
   catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : 'Admin login failed'
+    errorMessage.value = getLoginErrorMessage(error)
   }
   finally {
     loading.value = false
@@ -119,9 +148,9 @@ onMounted(async () => {
           <div class="mx-auto w-full max-w-[460px] space-y-5">
             <div class="flex items-start justify-between gap-4">
               <div class="space-y-4">
-                <div :class="['text-xs font-black uppercase tracking-[0.24em]', eyebrowClass]">Admin Access</div>
+                <div :class="['text-xs font-black uppercase tracking-[0.24em]', eyebrowClass]">Protected Access</div>
                 <img :src="logoSrc" alt="PUMA Battery" class="h-16 w-auto object-contain sm:h-20" />
-                <h1 :class="['text-4xl font-black tracking-tight sm:text-5xl', pageTextClass]">Battery QC Admin</h1>
+                <h1 :class="['text-4xl font-black tracking-tight sm:text-5xl', pageTextClass]">Battery QC Access</h1>
               </div>
 
               <UButton
@@ -136,23 +165,14 @@ onMounted(async () => {
 
             <div class="space-y-2 pt-2">
               <div :class="['text-xs font-black uppercase tracking-[0.22em]', eyebrowClass]">Sign In</div>
-              <h2 :class="['text-2xl font-black tracking-tight', pageTextClass]">เข้าสู่ระบบ Admin</h2>
+              <h2 :class="['text-2xl font-black tracking-tight', pageTextClass]">เข้าสู่ระบบ</h2>
               <p :class="['text-sm font-semibold leading-6', mutedTextClass]">
-                ใช้ Admin PIN เพื่อเข้าสู่หน้าจัดการใบงาน QC และ action ฝั่ง admin
+                ใช้ Username และ PIN สำหรับ Admin หรือ Calibration Workspace
               </p>
             </div>
 
             <UAlert
-              v-if="!configured"
-              color="info"
-              variant="soft"
-              title="Admin PIN ยังไม่ถูกตั้งค่า"
-              description="กำหนดค่า ADMIN_PIN และ ADMIN_SESSION_SECRET ในไฟล์ .env ก่อนใช้งานหน้า admin"
-              :ui="messageAlertUi"
-            />
-
-            <UAlert
-              v-else-if="errorMessage"
+              v-if="errorMessage"
               color="error"
               variant="soft"
               title="Login Error"
@@ -160,16 +180,31 @@ onMounted(async () => {
               :ui="errorAlertUi"
             />
 
-            <UFormField label="Admin PIN" name="admin-pin" required :ui="fieldUi">
+            <UFormField label="Username" name="username" required :ui="fieldUi">
               <UInput
-                v-model="pin"
-                type="password"
-                placeholder="กรอก Admin PIN"
+                v-model="username"
+                placeholder="เช่น ADMIN"
                 color="neutral"
                 variant="outline"
                 size="md"
                 class="w-full"
-                :disabled="!configured || loading"
+                :disabled="loading"
+                :ui="inputUi"
+                autocomplete="username"
+                @keyup.enter="submitAdminLogin"
+              />
+            </UFormField>
+
+            <UFormField label="PIN" name="admin-pin" required :ui="fieldUi">
+              <UInput
+                v-model="pin"
+                type="password"
+                placeholder="กรอก PIN"
+                color="neutral"
+                variant="outline"
+                size="md"
+                class="w-full"
+                :disabled="loading"
                 :ui="inputUi"
                 @keyup.enter="submitAdminLogin"
               />
@@ -180,11 +215,11 @@ onMounted(async () => {
               variant="solid"
               block
               :loading="loading"
-              :disabled="!configured"
+              :disabled="loading"
               :class="loginButtonClass"
               @click="submitAdminLogin"
             >
-              Login Admin
+              Sign In
             </UButton>
           </div>
         </div>

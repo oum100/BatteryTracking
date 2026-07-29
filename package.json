@@ -9,6 +9,7 @@
     "db:push": "prisma db push",
     "db:seed": "node prisma/seed.mjs",
     "db:studio": "prisma studio",
+    "auth:bootstrap-admin": "node prisma/bootstrap-admin.mjs",
     "dev": "nuxt dev",
     "generate": "nuxt generate",
     "preview": "nuxt preview",

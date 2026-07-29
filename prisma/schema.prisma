@@ -32,6 +32,16 @@ enum ShipToFactory {
   FTM
 }
 
+enum UserRole {
+  ADMIN
+  CALIBRATOR
+}
+
+enum VoltMeterCalibrationSource {
+  INA226
+  INA228
+}
+
 model Battery {
   id            String        @id @default(cuid())
   code          String        @unique
@@ -83,6 +93,20 @@ model Employee {
   updatedAt               DateTime     @updatedAt
 
   @@index([active, name])
+}
+
+model UserAccount {
+  id          String   @id @default(cuid())
+  username    String   @unique
+  displayName String
+  pinHash     String
+  role        UserRole
+  active      Boolean  @default(true)
+  lastLoginAt DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([active, role])
 }
 
 model SalesOrder {
@@ -201,8 +225,9 @@ model BatteryJobSlot {
 
 model VoltMeterCalibration {
   id             String   @id @default(cuid())
-  deviceId       String   @unique
+  deviceId       String
   deviceName     String?
+  source         VoltMeterCalibrationSource @default(INA226)
   inaGain        Float
   inaOffset      Float
   pointOneMeter  Float
@@ -215,4 +240,5 @@ model VoltMeterCalibration {
 
   @@index([deviceName])
   @@index([updatedAt])
+  @@unique([deviceId, source])
 }
