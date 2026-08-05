@@ -34,6 +34,7 @@ const queueBadgeClass = computed(() => {
 
   return "bg-amber-700 text-white ring-amber-800/20";
 });
+
 </script>
 
 <template>
@@ -51,10 +52,17 @@ const queueBadgeClass = computed(() => {
           Select Mode
         </div>
         <div
-          class="mt-2 inline-flex rounded-full px-2.5 py-1 text-[11px] font-black tracking-[0.08em] shadow-sm ring-1 sm:text-xs"
+          class="mt-2 inline-flex items-center gap-2 rounded-full py-1 pl-3 pr-2 shadow-sm ring-1"
           :class="queueBadgeClass"
         >
-          WAITING {{ queueCount ?? "-" }}
+          <span class="text-[11px] font-black tracking-[0.12em] sm:text-xs">
+            WAITING
+          </span>
+          <span
+            class="flex min-w-8 items-center justify-center rounded-full bg-white/20 px-2 py-0.5 text-2xl font-black leading-none tabular-nums sm:min-w-10 sm:text-3xl"
+          >
+            {{ queueCount ?? "-" }}
+          </span>
         </div>
       </div>
       <div

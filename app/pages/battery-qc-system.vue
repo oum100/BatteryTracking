@@ -2,6 +2,8 @@
 type JobPhase = "BEFORE_CHARGE" | "AFTER_CHARGE" | "DELIVERY";
 type ScanTarget = "rack" | "battery";
 
+const LAST_OPEN_JOB_STORAGE_KEY = "battery-qc:last-open-job";
+
 interface EmployeeItem {
   id: string;
   code: string;
@@ -1055,6 +1057,50 @@ function resetPhaseContext() {
   openedAt.value = toDateTimeLocalValue(new Date());
 }
 
+function rememberOpenJob() {
+  if (!import.meta.client || !currentJob.value || !phase.value) {
+    return;
+  }
+
+  sessionStorage.setItem(
+    LAST_OPEN_JOB_STORAGE_KEY,
+    JSON.stringify({ jobId: currentJob.value.id, phase: phase.value }),
+  );
+}
+
+function forgetOpenJob() {
+  if (import.meta.client) {
+    sessionStorage.removeItem(LAST_OPEN_JOB_STORAGE_KEY);
+  }
+}
+
+async function restoreOpenJob() {
+  if (!import.meta.client) {
+    return;
+  }
+
+  const saved = sessionStorage.getItem(LAST_OPEN_JOB_STORAGE_KEY);
+  if (!saved) {
+    return;
+  }
+
+  try {
+    const { jobId, phase: savedPhase } = JSON.parse(saved) as {
+      jobId?: string;
+      phase?: JobPhase;
+    };
+    if (!jobId || !["BEFORE_CHARGE", "AFTER_CHARGE", "DELIVERY"].includes(savedPhase ?? "")) {
+      forgetOpenJob();
+      return;
+    }
+
+    phase.value = savedPhase as JobPhase;
+    await applyPendingAdminJob(jobId);
+  } catch {
+    forgetOpenJob();
+  }
+}
+
 function syncWorkflowSlotInputs() {
   batteryScanInput.value = selectedSlot.value?.batteryId ?? "";
 }
@@ -1556,6 +1602,7 @@ async function focusQcJobInputAfterPhaseSelect() {
 }
 
 function backToPhaseLanding() {
+  forgetOpenJob();
   phase.value = null;
   resetPhaseContext();
   actionMessage.value = "เลือกโหมด QC เพื่อเริ่มงาน";
@@ -2666,6 +2713,7 @@ async function openCurrentJob(skipRequiredValidation = false) {
 
     applyJob(response.job);
     jobDetailsSaved.value = true;
+    rememberOpenJob();
     await armDefaultWorkflow();
     await revealRackLayout();
     actionMessage.value =
@@ -2707,6 +2755,7 @@ async function loadExistingRack() {
 
     applyJob(response.job);
     jobDetailsSaved.value = true;
+    rememberOpenJob();
     await armDefaultWorkflow();
     await revealRackLayout();
     actionMessage.value = `โหลด rack ${rackId.value.toUpperCase()} สำเร็จ`;
@@ -2942,6 +2991,7 @@ async function confirmCurrentPhase() {
 
     phase.value = response.job.phase;
     applyJob(response.job);
+    rememberOpenJob();
     void loadPhaseQueueCounts().catch(() => undefined);
     actionMessage.value =
       confirmedPhase === "DELIVERY"
@@ -2971,6 +3021,7 @@ function formatDateTime(value: string | null) {
 onMounted(async () => {
   try {
     await loadMasters();
+    await restoreOpenJob();
     await loadPhaseQueueCounts().catch(() => undefined);
     phaseQueueRefreshTimer = setInterval(() => {
       void loadPhaseQueueCounts();
