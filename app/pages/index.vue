@@ -78,9 +78,12 @@ const historyLinks = [
       >
         <div class="space-y-6">
           <div class="space-y-4">
-            <UBadge class="rounded-full bg-slate-800 px-4 py-2 text-sm font-bold tracking-[0.22em] text-white">
-              BatteryTracking
-            </UBadge>
+            <div class="flex items-center justify-between gap-4">
+              <UBadge class="rounded-full bg-slate-800 px-4 py-2 text-sm font-bold tracking-[0.22em] text-white">
+                BatteryTracking
+              </UBadge>
+              <p class="text-xs font-black uppercase tracking-[0.18em] text-slate-500">Version 1.0.5</p>
+            </div>
 
             <div class="space-y-2">
               <h1 class="text-4xl font-black tracking-tight text-slate-950 sm:text-5xl">
