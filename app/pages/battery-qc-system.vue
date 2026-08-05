@@ -733,8 +733,16 @@ const jobDetailsLocked = computed(
     hasJob.value &&
     (Boolean(currentJob.value?.isLocked) || currentPhaseConfirmed.value),
 );
+const canEditRackDuringBeforeCharge = computed(
+  () =>
+    currentJob.value?.phase === "BEFORE_CHARGE" &&
+    phase.value === "BEFORE_CHARGE" &&
+    !jobDetailsLocked.value,
+);
 const rackDetailsLocked = computed(
-  () => jobDetailsLocked.value || jobHasRecordedSlotData.value,
+  () =>
+    jobDetailsLocked.value ||
+    (jobHasRecordedSlotData.value && !canEditRackDuringBeforeCharge.value),
 );
 const jobDetailsMatchCurrentJob = computed(() => {
   if (!currentJob.value) {
@@ -3491,6 +3499,12 @@ onBeforeUnmount(() => {
               >
                 Rack # และ QC Job ถูกล็อกแล้วหลังเริ่มบันทึก slot แต่ยังแก้ Emp
                 ID, Charge Channel และ Charge Program ได้จนกว่าจะ Confirm
+              </div>
+              <div
+                v-else-if="jobHasRecordedSlotData && canEditRackDuringBeforeCharge"
+                class="mt-3 rounded-[14px] border border-sky-300 bg-sky-50 px-4 py-3 text-sm font-semibold text-sky-950"
+              >
+                ระหว่าง QC Before Charge ยังแก้ Rack # ได้จนกว่าจะ Confirm phase นี้
               </div>
             </template>
 

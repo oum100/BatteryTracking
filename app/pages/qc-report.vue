@@ -3,6 +3,9 @@ type JobPhase = 'BEFORE_CHARGE' | 'AFTER_CHARGE' | 'DELIVERY'
 
 interface BatteryJobSlot {
   id: string
+  jobRef: string
+  batchId: string | null
+  batchRef: string
   slotNumber: number
   batteryId: string
   beforeVoltage: number | null
@@ -41,7 +44,7 @@ interface BatteryJobRecord {
 
 const route = useRoute()
 const router = useRouter()
-const selectedRackId = ref('')
+const selectedJobId = ref('')
 const isExportingExcel = ref(false)
 const isExportingPdf = ref(false)
 let pdfLogoDataUrlPromise: Promise<string | null> | null = null
@@ -52,66 +55,54 @@ const { data, pending, refresh } = await useFetch<{ ok: boolean, jobs: BatteryJo
 
 const jobs = computed(() => data.value?.jobs ?? [])
 
-const latestRackJobs = computed(() => {
-  const seen = new Set<string>()
-
-  return jobs.value.filter((job) => {
-    if (!job.rackId || seen.has(job.rackId)) {
-      return false
-    }
-
-    seen.add(job.rackId)
-    return true
-  })
-})
-
 const selectedJob = computed(() => {
-  if (!selectedRackId.value) {
-    return latestRackJobs.value[0] ?? null
+  if (!selectedJobId.value) {
+    return jobs.value[0] ?? null
   }
 
-  return latestRackJobs.value.find(job => job.rackId === selectedRackId.value) ?? latestRackJobs.value[0] ?? null
+  return jobs.value.find(job => job.id === selectedJobId.value) ?? jobs.value[0] ?? null
 })
 
-const rackOptions = computed(() => {
-  return latestRackJobs.value.map(job => ({
-    label: job.rackId,
-    value: job.rackId,
+const jobOptions = computed(() => {
+  return jobs.value.map(job => ({
+    label: `${job.jobRef} · Rack ${job.rackId || '-'}`,
+    value: job.id,
   }))
 })
 
 const reportDisplayId = computed(() => {
-  const rackId = selectedJob.value?.rackId?.trim()
+  const jobRef = selectedJob.value?.jobRef?.trim()
   const salesOrderNumber = selectedJob.value?.salesOrderNumber?.trim()
 
-  if (rackId && salesOrderNumber) {
-    return `${rackId}-${salesOrderNumber}`
+  if (jobRef && salesOrderNumber) {
+    return `${jobRef}-${salesOrderNumber}`
   }
 
-  return rackId || salesOrderNumber || '-'
+  return jobRef || salesOrderNumber || '-'
 })
 
 watchEffect(() => {
+  const jobFromQuery = typeof route.query.jobId === 'string' ? route.query.jobId : ''
   const rackFromQuery = typeof route.query.rackId === 'string' ? route.query.rackId : ''
 
-  if (!selectedRackId.value) {
-    selectedRackId.value = rackFromQuery || latestRackJobs.value[0]?.rackId || ''
+  if (!selectedJobId.value) {
+    selectedJobId.value = jobFromQuery || jobs.value.find(job => job.rackId === rackFromQuery)?.id || jobs.value[0]?.id || ''
   }
 })
 
-watch(selectedRackId, async (value) => {
+watch(selectedJobId, async (value) => {
   if (!value) {
     return
   }
 
-  if (route.query.rackId === value) {
+  if (route.query.jobId === value) {
     return
   }
 
   await router.replace({
     query: {
       ...route.query,
-      rackId: value,
+      jobId: value,
     },
   })
 })
@@ -207,8 +198,8 @@ function getReportFileBaseName(job: BatteryJobRecord | null) {
     return `battery-qc-summary-${new Date().toISOString().slice(0, 10)}`
   }
 
-  const safeRackId = job.rackId.replace(/[^a-zA-Z0-9-_]/g, '-')
-  return `battery-qc-summary-${safeRackId}-${new Date().toISOString().slice(0, 10)}`
+  const safeJobRef = job.jobRef.replace(/[^a-zA-Z0-9-_]/g, '-')
+  return `battery-qc-summary-${safeJobRef}-${new Date().toISOString().slice(0, 10)}`
 }
 
 async function getPdfLogoDataUrl() {
@@ -492,20 +483,20 @@ function refreshReports() {
           body: 'p-3 sm:p-4'
         }"
       >
-        <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-7">
+            <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-7">
           <div class="rounded-[14px] border border-slate-200 bg-slate-50 px-4 py-1">
-            <div class="text-[14px] font-normal tracking-[0.08em] text-slate-500">Rack #</div>
+            <div class="text-[14px] font-normal tracking-[0.08em] text-slate-500">Job #</div>
             <USelectMenu
-              v-model="selectedRackId"
-              :items="rackOptions"
+              v-model="selectedJobId"
+              :items="jobOptions"
               value-key="value"
               label-key="label"
               searchable
               color="neutral"
               variant="outline"
               size="lg"
-              placeholder="Select rack"
-              :search-input="{ placeholder: 'Search rack...' }"
+              placeholder="Select job"
+              :search-input="{ placeholder: 'Search job...' }"
               class="mt-1 w-full"
               :ui="{
                 base: 'h-[40px] w-full rounded-[12px] border-slate-200 bg-white px-3 text-[0.95rem] font-bold text-slate-950',

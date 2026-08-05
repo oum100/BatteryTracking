@@ -102,11 +102,13 @@ const updateShipDatePopoverOpen = ref(false)
 const createdDateFilterPopoverOpen = ref(false)
 const shipDateFilterPopoverOpen = ref(false)
 const deleteConfirmOpen = ref(false)
+const resetConfirmOpen = ref(false)
 const pendingDelete = ref<{
   ids: string[]
   applyToGroups: boolean
   jobs: Array<Pick<AdminJobTableRow, 'jobRef' | 'rackId' | 'salesOrderNumber'>>
 } | null>(null)
+const pendingReset = ref<Pick<AdminJobTableRow, 'id' | 'jobRef' | 'rackId' | 'salesOrderNumber'> | null>(null)
 const toast = useToast()
 
 const createSalesOrderId = ref('')
@@ -777,6 +779,28 @@ async function deleteSingleJob(id: string) {
   deleteConfirmOpen.value = true
 }
 
+function requestResetJob(row: AdminJobTableRow) {
+  pendingReset.value = row
+  resetConfirmOpen.value = true
+}
+
+async function confirmResetJob() {
+  const job = pendingReset.value
+  if (!job) return
+
+  isBusy.value = true
+  try {
+    await $fetch(`/api/battery-jobs/${job.id}/reset`, { method: 'PATCH' })
+    await loadJobs()
+    setActionFeedback(`ล้างข้อมูล QC ของ ${job.jobRef} แล้ว สามารถลบใบงานได้`, 'success')
+  }
+  finally {
+    isBusy.value = false
+    resetConfirmOpen.value = false
+    pendingReset.value = null
+  }
+}
+
 watch([statusFilter, salesOrderFilter, invoiceFilter, groupFilter, shipToFilter, createdDateFilter, shipDateFilter], () => {
   currentPage.value = 1
 })
@@ -846,6 +870,9 @@ onBeforeUnmount(() => {
               </UButton>
               <UButton to="/battery-qc-master-data" :class="navSecondaryButtonClass">
                 Manage SO & Invoice
+              </UButton>
+              <UButton to="/battery-qc-employees" :class="navSecondaryButtonClass">
+                Manage Employees
               </UButton>
               <UButton :class="navPrimaryButtonClass" @click="openCreateModal">
                 Create QC Job
@@ -1056,7 +1083,32 @@ onBeforeUnmount(() => {
             </template>
 
             <template #actions-cell="{ row }">
-              <div class="flex justify-end">
+              <div class="flex justify-end gap-1">
+                <UButton
+                  v-if="row.original.batchId"
+                  color="neutral"
+                  variant="ghost"
+                  icon="i-lucide-files"
+                  :to="{ path: '/qc-group-report', query: { batchId: row.original.batchId } }"
+                  title="ออกรายงานทั้ง Group"
+                  aria-label="ออกรายงานทั้ง Group"
+                  :class="isDarkMode
+                    ? 'rounded-full text-violet-300 hover:bg-violet-500/15 hover:text-violet-200'
+                    : 'rounded-full text-violet-700 hover:bg-violet-50 hover:text-violet-800'"
+                />
+                <UButton
+                  v-if="!row.original.canDelete"
+                  color="neutral"
+                  variant="ghost"
+                  icon="i-lucide-rotate-ccw"
+                  :disabled="isBusy"
+                  title="ล้างข้อมูล QC เพื่อให้ลบใบงานได้"
+                  aria-label="ล้างข้อมูล QC"
+                  :class="isDarkMode
+                    ? 'rounded-full text-amber-300 hover:bg-amber-500/15 hover:text-amber-200'
+                    : 'rounded-full text-amber-700 hover:bg-amber-50 hover:text-amber-800'"
+                  @click="requestResetJob(row.original)"
+                />
                 <UButton
                   color="neutral"
                   variant="ghost"
@@ -1064,9 +1116,11 @@ onBeforeUnmount(() => {
                   :disabled="isBusy || !row.original.canDelete"
                   :title="row.original.canDelete ? 'ลบใบงาน' : 'ลบไม่ได้: ใบงานมีความคืบหน้า QC หรือถูกล็อกแล้ว'"
                   :aria-label="row.original.canDelete ? 'ลบใบงาน' : 'ลบใบงานไม่ได้'"
-                  :class="isDarkMode
-                    ? 'rounded-full text-rose-300 hover:bg-rose-500/15 hover:text-rose-200'
-                    : 'rounded-full text-rose-600 hover:bg-rose-50 hover:text-rose-700'"
+                  :class="!row.original.canDelete
+                    ? 'rounded-full text-slate-400 opacity-100'
+                    : isDarkMode
+                        ? 'rounded-full text-rose-300 hover:bg-rose-500/15 hover:text-rose-200'
+                        : 'rounded-full text-rose-600 hover:bg-rose-50 hover:text-rose-700'"
                   @click="deleteSingleJob(row.original.id)"
                 />
               </div>
@@ -1328,6 +1382,37 @@ onBeforeUnmount(() => {
                 >
                   Delete Permanently
                 </UButton>
+              </div>
+            </template>
+          </UCard>
+        </template>
+      </UModal>
+
+      <UModal v-model:open="resetConfirmOpen" :dismissible="!isBusy" :ui="{ content: 'sm:max-w-xl' }">
+        <template #content>
+          <UCard :ui="modalCardUi">
+            <template #header>
+              <div>
+                <div class="text-xs font-black uppercase tracking-[0.2em] text-amber-600">Reset QC Data</div>
+                <h3 :class="['mt-1 text-2xl font-black', headingClass]">ยืนยันการล้างข้อมูล QC</h3>
+                <p :class="['mt-2 text-sm font-semibold', bodyTextClass]">ข้อมูลที่วัดหรือสแกนแล้วจะถูกล้างและกู้คืนไม่ได้</p>
+              </div>
+            </template>
+
+            <div v-if="pendingReset" class="space-y-3">
+              <div :class="isDarkMode ? 'rounded-[12px] border border-amber-800 bg-amber-950/30 px-4 py-3 text-sm text-amber-100' : 'rounded-[12px] border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950'">
+                ระบบจะล้าง Battery SN, ค่า Voltage, เวลาวัด, phase completion และ lock แล้วคืนสถานะเป็น <span class="font-black">New Job</span>
+              </div>
+              <div :class="isDarkMode ? 'rounded-[10px] border border-slate-700 bg-slate-800 px-4 py-3' : 'rounded-[10px] border border-slate-200 bg-slate-50 px-4 py-3'">
+                <div :class="['font-black', headingClass]">{{ pendingReset.jobRef }}</div>
+                <div :class="['mt-1 text-sm', bodyTextClass]">Rack: {{ pendingReset.rackId || '-' }} · SO: {{ pendingReset.salesOrderNumber }}</div>
+              </div>
+            </div>
+
+            <template #footer>
+              <div class="flex justify-end gap-3">
+                <UButton color="neutral" variant="outline" :disabled="isBusy" :class="outlineActionButtonClass" @click="resetConfirmOpen = false">Cancel</UButton>
+                <UButton color="warning" variant="solid" :loading="isBusy" class="rounded-full px-4 text-sm font-black" @click="confirmResetJob">Reset QC Data</UButton>
               </div>
             </template>
           </UCard>

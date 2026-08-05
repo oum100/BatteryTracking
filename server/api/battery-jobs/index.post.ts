@@ -180,11 +180,35 @@ export default defineEventHandler(async (event) => {
       })
     }
 
-    if (requestedRackId !== existingJob.rackId) {
+    const rackChanged = requestedRackId !== null && requestedRackId !== existingJob.rackId
+    const canChangeRack =
+      existingJob.phase === 'BEFORE_CHARGE' &&
+      phase === 'BEFORE_CHARGE' &&
+      !existingJob.beforeChargeCompletedAt &&
+      !isBatteryJobLocked(existingJob)
+
+    if (rackChanged && !canChangeRack) {
       throw createError({
         statusCode: 409,
-        statusMessage: 'rackId cannot be changed after slot data has been recorded',
+        statusMessage: 'rackId can only be changed while QC Before Charge is in progress',
       })
+    }
+
+    if (rackChanged && requestedRackId) {
+      const rackConflict = await prisma.batteryJob.findFirst({
+        where: {
+          rackId: requestedRackId,
+          id: { not: existingJob.id },
+        },
+        select: { id: true },
+      })
+
+      if (rackConflict) {
+        throw createError({
+          statusCode: 409,
+          statusMessage: `rack ${requestedRackId} is already assigned to another job`,
+        })
+      }
     }
 
     const job = await prisma.batteryJob.update({
@@ -193,9 +217,11 @@ export default defineEventHandler(async (event) => {
       },
       data: {
         phase,
+        ...(rackChanged && requestedRackId ? { rackId: requestedRackId } : {}),
         status: getDerivedBatteryJobStatus({
           ...existingJob,
           phase,
+          ...(rackChanged && requestedRackId ? { rackId: requestedRackId } : {}),
         }),
         ...(operatorId ? { [getPhaseOperatorField(phase)]: operatorId } : {}),
         ...(chargeChannelId !== null ? { chargeChannelId } : {}),
