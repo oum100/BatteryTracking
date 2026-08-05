@@ -296,6 +296,7 @@ export function formatBatteryJob(job: Record<string, any>) {
     workflowLabel: getBatteryJobWorkflowLabel(job),
     recommendedPhase: getRecommendedPhase(job),
     isLocked: isBatteryJobLocked(job),
+    canDelete: !isBatteryJobLocked(job) && !jobHasRecordedSlotData(job),
     internalRackId: rawRackId,
     hasAssignedRack,
     rackLabel: hasAssignedRack ? rackId : 'รอเจ้าหน้าที่กำหนด Rack',

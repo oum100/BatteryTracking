@@ -35,6 +35,7 @@ interface BatteryJobRecord {
   workflowStage?: AdminJobViewState
   workflowLabel?: string
   isLocked?: boolean
+  canDelete?: boolean
   salesOrderId: string | null
   salesOrderNumber: string | null
   invoiceId: string | null
@@ -79,6 +80,7 @@ interface AdminJobTableRow {
   plannedDeliveryDate: string
   viewState: AdminJobViewState
   viewStateLabel: string
+  canDelete: boolean
 }
 
 const salesOrders = ref<SalesOrderItem[]>([])
@@ -367,6 +369,7 @@ const tableRows = computed<AdminJobTableRow[]>(() => jobs.value
       plannedDeliveryDate: formatDate(job.plannedDeliveryDate),
       viewState,
       viewStateLabel: getJobViewStateLabel(viewState),
+      canDelete: job.canDelete ?? false,
     }
   }))
 
@@ -1058,6 +1061,9 @@ onBeforeUnmount(() => {
                   color="neutral"
                   variant="ghost"
                   icon="i-lucide-trash-2"
+                  :disabled="isBusy || !row.original.canDelete"
+                  :title="row.original.canDelete ? 'ลบใบงาน' : 'ลบไม่ได้: ใบงานมีความคืบหน้า QC หรือถูกล็อกแล้ว'"
+                  :aria-label="row.original.canDelete ? 'ลบใบงาน' : 'ลบใบงานไม่ได้'"
                   :class="isDarkMode
                     ? 'rounded-full text-rose-300 hover:bg-rose-500/15 hover:text-rose-200'
                     : 'rounded-full text-rose-600 hover:bg-rose-50 hover:text-rose-700'"
