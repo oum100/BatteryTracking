@@ -1,5 +1,5 @@
--- Each sales order must own exactly one invoice. Existing ambiguous data is
--- rejected so a production migration cannot silently assign the wrong pair.
+-- Preserve a legacy Invoice link only when it is unambiguous. An SO may exist
+-- before its Invoice is issued, so an unmatched SO must remain valid.
 ALTER TABLE "SalesOrder" ADD COLUMN "invoiceId" TEXT;
 
 WITH "SalesOrderInvoice" AS (
@@ -14,23 +14,6 @@ SET "invoiceId" = "SalesOrderInvoice"."invoiceId"
 FROM "SalesOrderInvoice"
 WHERE "SalesOrder"."id" = "SalesOrderInvoice"."salesOrderId";
 
-DO $$
-BEGIN
-  IF EXISTS (SELECT 1 FROM "SalesOrder" WHERE "invoiceId" IS NULL) THEN
-    RAISE EXCEPTION 'Every existing SalesOrder must have exactly one Invoice before this migration';
-  END IF;
-
-  IF EXISTS (
-    SELECT "invoiceId"
-    FROM "SalesOrder"
-    GROUP BY "invoiceId"
-    HAVING COUNT(*) > 1
-  ) THEN
-    RAISE EXCEPTION 'An Invoice cannot be linked to more than one SalesOrder';
-  END IF;
-END $$;
-
-ALTER TABLE "SalesOrder" ALTER COLUMN "invoiceId" SET NOT NULL;
 CREATE UNIQUE INDEX "SalesOrder_invoiceId_key" ON "SalesOrder"("invoiceId");
 ALTER TABLE "SalesOrder" ADD CONSTRAINT "SalesOrder_invoiceId_fkey"
   FOREIGN KEY ("invoiceId") REFERENCES "Invoice"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
