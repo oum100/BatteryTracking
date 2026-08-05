@@ -7,6 +7,7 @@ export default defineEventHandler(async () => {
       where: {
         active: true,
       },
+      include: { invoice: true },
       orderBy: {
         soNumber: 'asc',
       },

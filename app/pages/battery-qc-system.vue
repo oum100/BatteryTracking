@@ -131,7 +131,6 @@ const jobOptions = ref<BatteryJobRecord[]>([]);
 const adminJobId = ref("");
 const employees = ref<EmployeeItem[]>([]);
 const salesOrders = ref<SalesOrderItem[]>([]);
-const invoices = ref<InvoiceItem[]>([]);
 const chargeChannels = ref<ChargeChannelItem[]>([]);
 const chargePrograms = ref<ChargeProgramItem[]>([]);
 const selectedSlotNumber = ref(1);
@@ -141,7 +140,6 @@ const operatorId = ref("");
 const employeeScanInput = ref("");
 const salesOrderId = ref("");
 const rackId = ref("");
-const invoiceId = ref("");
 const chargeChannelId = ref("");
 const chargeProgramId = ref("");
 const batteryScanInput = ref("");
@@ -1044,7 +1042,6 @@ function resetPhaseContext() {
   operatorId.value = "";
   employeeScanInput.value = "";
   salesOrderId.value = "";
-  invoiceId.value = "";
   chargeChannelId.value = "";
   chargeProgramId.value = getDefaultNightChargeProgramId();
   openedAt.value = toDateTimeLocalValue(new Date());
@@ -2327,7 +2324,6 @@ function applyJob(job: any) {
   operatorId.value = getPhaseOperatorId(currentJob.value, phase.value);
   employeeScanInput.value = selectedEmployee.value?.code ?? "";
   salesOrderId.value = currentJob.value.salesOrderId ?? "";
-  invoiceId.value = currentJob.value.invoiceId ?? "";
   chargeChannelId.value = currentJob.value.chargeChannelId ?? "";
   chargeProgramId.value =
     currentJob.value.chargeProgramId ?? getDefaultNightChargeProgramId();
@@ -2528,14 +2524,12 @@ async function loadMasters() {
   const [
     employeeResponse,
     salesOrderResponse,
-    invoiceResponse,
     chargeChannelResponse,
     chargeProgramResponse,
     jobResponse,
   ] = await Promise.all([
     fetchMasterData<{ employees: EmployeeItem[] }>("/api/employees"),
     fetchMasterData<{ salesOrders: SalesOrderItem[] }>("/api/sales-orders"),
-    fetchMasterData<{ invoices: InvoiceItem[] }>("/api/invoices"),
     fetchMasterData<{ chargeChannels: ChargeChannelItem[] }>(
       "/api/charge-channels",
     ),
@@ -2547,7 +2541,6 @@ async function loadMasters() {
 
   employees.value = employeeResponse.employees;
   salesOrders.value = salesOrderResponse.salesOrders;
-  invoices.value = invoiceResponse.invoices;
   chargeChannels.value = chargeChannelResponse.chargeChannels;
   chargePrograms.value = chargeProgramResponse.chargePrograms;
   jobOptions.value = jobResponse.jobs.map(normalizeJob);
@@ -2656,7 +2649,6 @@ async function openCurrentJob(skipRequiredValidation = false) {
           rackId: rackId.value,
           operatorId: operatorId.value || null,
           salesOrderId: salesOrderId.value || null,
-          invoiceId: invoiceId.value || null,
           chargeChannelId: chargeChannelId.value || null,
           chargeProgramId: chargeProgramId.value || null,
           openedAt: new Date(openedAt.value).toISOString(),

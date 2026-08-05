@@ -7,7 +7,6 @@ interface BulkPayload {
   ids?: string[]
   applyToGroups?: boolean
   salesOrderId?: string | null
-  invoiceId?: string | null
   plannedDeliveryDate?: string | null
   shipTo?: string | null
 }
@@ -78,13 +77,20 @@ export default defineEventHandler(async (event) => {
     }
 
     const salesOrderId = ensureOptionalText(body.salesOrderId)
-    const invoiceId = ensureOptionalText(body.invoiceId)
     const plannedDeliveryDate = ensureOptionalDate(body.plannedDeliveryDate)
     const shipTo = ensureOptionalShipTo(body.shipTo)
 
+    if (salesOrderId) {
+      const salesOrder = await prisma.salesOrder.findFirst({
+        where: { id: salesOrderId, active: true },
+      })
+      if (!salesOrder) {
+        throw createError({ statusCode: 400, statusMessage: 'salesOrderId must reference an active SO' })
+      }
+    }
+
     const data = {
       ...(salesOrderId !== null ? { salesOrderId } : {}),
-      ...(invoiceId !== null ? { invoiceId } : {}),
       ...(plannedDeliveryDate !== null ? { plannedDeliveryDate } : {}),
       ...(shipTo !== null ? { shipTo } : {}),
     }

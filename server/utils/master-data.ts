@@ -15,11 +15,11 @@ export const salesOrderDefaults = [
 ] as const
 
 export const invoiceDefaults = [
-  { id: 'fallback-inv-01', invoiceNo: '6907017', description: 'Invoice 6907017', active: true },
-  { id: 'fallback-inv-02', invoiceNo: '6907018', description: 'Invoice 6907018', active: true },
-  { id: 'fallback-inv-03', invoiceNo: '6907019', description: 'Invoice 6907019', active: true },
-  { id: 'fallback-inv-04', invoiceNo: '6907020', description: 'Invoice 6907020', active: true },
-  { id: 'fallback-inv-05', invoiceNo: '6907021', description: 'Invoice 6907021', active: true },
+  { id: 'fallback-inv-01', invoiceNo: '6907017', active: true },
+  { id: 'fallback-inv-02', invoiceNo: '6907018', active: true },
+  { id: 'fallback-inv-03', invoiceNo: '6907019', active: true },
+  { id: 'fallback-inv-04', invoiceNo: '6907020', active: true },
+  { id: 'fallback-inv-05', invoiceNo: '6907021', active: true },
 ] as const
 
 export const chargeChannelDefaults = [

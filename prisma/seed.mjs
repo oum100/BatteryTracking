@@ -68,26 +68,38 @@ async function syncSalesOrders() {
 
 async function syncInvoices() {
   const defaultValues = invoiceDefaults.map(item => item.invoiceNo)
+  const salesOrders = await prisma.salesOrder.findMany({
+    where: { soNumber: { in: salesOrderDefaults.map(item => item.soNumber) } },
+    select: { id: true, soNumber: true },
+  })
+  const salesOrderIdByNumber = new Map(salesOrders.map(salesOrder => [salesOrder.soNumber, salesOrder.id]))
 
-  await Promise.all(invoiceDefaults.map(item =>
+  await Promise.all(invoiceDefaults.map((item, index) => {
+    const salesOrderId = salesOrderIdByNumber.get(salesOrderDefaults[index]?.soNumber)
+    if (!salesOrderId) {
+      throw new Error(`Missing default SO for ${item.invoiceNo}`)
+    }
+
+    return (
     prisma.invoice.upsert({
       where: { invoiceNo: item.invoiceNo },
       update: {
-        description: item.description,
+        salesOrderId,
         active: item.active,
       },
       create: {
         invoiceNo: item.invoiceNo,
-        description: item.description,
+        salesOrderId,
         active: item.active,
       },
     }),
-  ))
+    )
+  }))
 
   await prisma.invoice.updateMany({
     where: {
       invoiceNo: { notIn: defaultValues },
-      jobs: { none: {} },
+      salesOrder: null,
     },
     data: { active: false },
   })
@@ -209,7 +221,6 @@ async function seedWorkflowMocks() {
       beforeChargeOperatorId: operator.id,
       ...(completeAfterCharge ? { afterChargeOperatorId: operator.id } : {}),
       salesOrderId: salesOrder.id,
-      invoiceId: invoice.id,
       chargeChannelId: chargeChannel.id,
       chargeProgramId: chargeProgram.id,
       plannedDeliveryDate,

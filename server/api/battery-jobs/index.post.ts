@@ -25,7 +25,6 @@ interface BatteryJobPayload {
   palletId?: string
   operatorId?: string | null
   salesOrderId?: string | null
-  invoiceId?: string | null
   chargeChannelId?: string | null
   chargeProgramId?: string | null
   openedAt?: string
@@ -50,7 +49,6 @@ export default defineEventHandler(async (event) => {
   const openedAt = body.openedAt ? new Date(body.openedAt) : body.workStartedAt ? new Date(body.workStartedAt) : new Date()
   const operatorId = ensureOptionalText(body.operatorId)
   const salesOrderId = ensureOptionalText(body.salesOrderId)
-  const invoiceId = ensureOptionalText(body.invoiceId)
   const chargeChannelId = ensureOptionalText(body.chargeChannelId)
   const chargeProgramId = ensureOptionalText(body.chargeProgramId)
   const plannedDeliveryDate = ensureOptionalDate(body.plannedDeliveryDate)
@@ -109,7 +107,6 @@ export default defineEventHandler(async (event) => {
         openedAt,
         ...(operatorId ? { [getPhaseOperatorField(phase)]: operatorId } : {}),
         ...(salesOrderId !== null ? { salesOrderId } : {}),
-        ...(invoiceId !== null ? { invoiceId } : {}),
         ...(phase === 'BEFORE_CHARGE' && chargeChannelId !== null ? { chargeChannelId } : {}),
         ...(phase === 'BEFORE_CHARGE' && chargeProgramId !== null ? { chargeProgramId } : {}),
         ...(plannedDeliveryDate !== null ? { plannedDeliveryDate } : {}),
@@ -153,7 +150,6 @@ export default defineEventHandler(async (event) => {
           rackId: rackCount === 1 && index === 0 ? rackId : createPendingRackId(),
           openedAt,
           salesOrderId,
-          invoiceId,
           chargeChannelId,
           chargeProgramId,
           plannedDeliveryDate,
@@ -230,7 +226,6 @@ export default defineEventHandler(async (event) => {
       openedAt,
       ...(operatorId ? { [getPhaseOperatorField(phase)]: operatorId } : {}),
       ...(salesOrderId !== null ? { salesOrderId } : {}),
-      ...(invoiceId !== null ? { invoiceId } : {}),
       ...(phase === 'BEFORE_CHARGE' && chargeChannelId !== null ? { chargeChannelId } : {}),
       ...(phase === 'BEFORE_CHARGE' && chargeProgramId !== null ? { chargeProgramId } : {}),
       ...(plannedDeliveryDate !== null ? { plannedDeliveryDate } : {}),

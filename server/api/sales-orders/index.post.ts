@@ -5,6 +5,7 @@ import { requireAdminSession } from '../../utils/admin-auth'
 interface SalesOrderPayload {
   soNumber?: string
   description?: string
+  invoiceNo?: string
 }
 
 export default defineEventHandler(async (event) => {
@@ -13,18 +14,28 @@ export default defineEventHandler(async (event) => {
   const body = await readBody<SalesOrderPayload>(event)
   const soNumber = ensureRequiredText(body.soNumber, 'soNumber').toUpperCase()
   const description = ensureOptionalText(body.description)
+  const invoiceNo = ensureOptionalText(body.invoiceNo)?.toUpperCase()
+  const salesOrder = await prisma.$transaction(async (tx) => {
+    const result = await tx.salesOrder.upsert({
+      where: { soNumber },
+      update: {
+        description,
+        active: true,
+      },
+      create: {
+        soNumber,
+        description,
+        active: true,
+      },
+    })
 
-  const salesOrder = await prisma.salesOrder.upsert({
-    where: { soNumber },
-    update: {
-      description,
-      active: true,
-    },
-    create: {
-      soNumber,
-      description,
-      active: true,
-    },
+    if (invoiceNo) {
+      await tx.invoice.create({
+        data: { invoiceNo, salesOrderId: result.id, active: true },
+      })
+    }
+
+    return result
   })
 
   return {

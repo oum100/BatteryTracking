@@ -114,6 +114,7 @@ model SalesOrder {
   soNumber    String       @unique
   description String?
   active      Boolean      @default(true)
+  invoice     Invoice?
   jobs        BatteryJob[]
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
@@ -124,13 +125,14 @@ model SalesOrder {
 model Invoice {
   id          String       @id @default(cuid())
   invoiceNo   String       @unique
-  description String?
   active      Boolean      @default(true)
-  jobs        BatteryJob[]
+  salesOrderId String?      @unique
+  salesOrder   SalesOrder?  @relation(fields: [salesOrderId], references: [id], onDelete: Restrict)
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
 
   @@index([active, invoiceNo])
+  @@index([salesOrderId])
 }
 
 model ChargeChannel {
@@ -176,8 +178,6 @@ model BatteryJob {
   beforeDeliveryOperator   Employee?         @relation("BeforeDeliveryOperator", fields: [beforeDeliveryOperatorId], references: [id], onDelete: SetNull)
   salesOrderId             String?
   salesOrder               SalesOrder?       @relation(fields: [salesOrderId], references: [id], onDelete: SetNull)
-  invoiceId                String?
-  invoice                  Invoice?          @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
   chargeChannelId          String?
   chargeChannel            ChargeChannel?    @relation(fields: [chargeChannelId], references: [id], onDelete: SetNull)
   chargeProgramId          String?

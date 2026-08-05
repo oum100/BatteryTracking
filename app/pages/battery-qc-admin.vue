@@ -108,14 +108,12 @@ const pendingDelete = ref<{
 const toast = useToast()
 
 const createSalesOrderId = ref('')
-const createInvoiceId = ref('')
 const createShipTo = ref<ShipToFactory>('AAT')
 const createCreatedDate = ref('')
 const createPlannedDeliveryDate = ref('')
 const createRackCount = ref<number | null>(1)
 
 const updateSalesOrderId = ref('')
-const updateInvoiceId = ref('')
 const updateShipTo = ref<ShipToFactory>('AAT')
 const updatePlannedDeliveryDate = ref('')
 
@@ -538,7 +536,6 @@ function toggleRowSelection(id: string, checked: boolean | 'indeterminate') {
 
 function resetCreateForm() {
   createSalesOrderId.value = ''
-  createInvoiceId.value = ''
   createShipTo.value = 'AAT'
   createCreatedDate.value = getTodayInputValue()
   createPlannedDeliveryDate.value = ''
@@ -547,7 +544,6 @@ function resetCreateForm() {
 
 function resetUpdateForm() {
   updateSalesOrderId.value = ''
-  updateInvoiceId.value = ''
   updateShipTo.value = 'AAT'
   updatePlannedDeliveryDate.value = ''
 }
@@ -565,7 +561,6 @@ function openUpdateModal() {
 
   const firstRow = selectedRows.value[0]
   updateSalesOrderId.value = firstRow.salesOrderId
-  updateInvoiceId.value = firstRow.invoiceId
   updateShipTo.value = firstRow.shipToRaw === 'ALL' ? 'AAT' : firstRow.shipToRaw
   updatePlannedDeliveryDate.value = firstRow.plannedDeliveryDateRaw
   isUpdateModalOpen.value = true
@@ -574,11 +569,6 @@ function openUpdateModal() {
 function validateCreateForm() {
   if (!createSalesOrderId.value) {
     setActionFeedback('Sale Order เป็นข้อมูลบังคับ', 'error')
-    return false
-  }
-
-  if (!createInvoiceId.value) {
-    setActionFeedback('Invoice เป็นข้อมูลบังคับ', 'error')
     return false
   }
 
@@ -599,11 +589,6 @@ function validateCreateForm() {
 function validateUpdateForm() {
   if (!updateSalesOrderId.value) {
     setActionFeedback('Sale Order เป็นข้อมูลบังคับ', 'error')
-    return false
-  }
-
-  if (!updateInvoiceId.value) {
-    setActionFeedback('Invoice เป็นข้อมูลบังคับ', 'error')
     return false
   }
 
@@ -644,7 +629,6 @@ async function createJobs() {
       method: 'POST',
       body: {
         salesOrderId: createSalesOrderId.value,
-        invoiceId: createInvoiceId.value,
         shipTo: createShipTo.value,
         plannedDeliveryDate: createPlannedDeliveryDate.value ? new Date(`${createPlannedDeliveryDate.value}T00:00:00`).toISOString() : null,
         rackCount: Number(createRackCount.value),
@@ -701,7 +685,6 @@ async function submitUpdateSelected() {
 
   const response = await runBulkAction('UPDATE', {
     salesOrderId: updateSalesOrderId.value,
-    invoiceId: updateInvoiceId.value,
     shipTo: updateShipTo.value,
     plannedDeliveryDate: updatePlannedDeliveryDate.value ? new Date(`${updatePlannedDeliveryDate.value}T00:00:00`).toISOString() : null,
   })
@@ -857,6 +840,9 @@ onBeforeUnmount(() => {
             <div class="flex flex-wrap justify-start gap-2 xl:justify-end">
               <UButton to="/battery-qc-system" :class="navSecondaryButtonClass">
                 Battery QC System
+              </UButton>
+              <UButton to="/battery-qc-master-data" :class="navSecondaryButtonClass">
+                Manage SO & Invoice
               </UButton>
               <UButton :class="navPrimaryButtonClass" @click="openCreateModal">
                 Create QC Job
@@ -1153,10 +1139,6 @@ onBeforeUnmount(() => {
                 <USelectMenu v-model="createSalesOrderId" :items="salesOrderOptions" value-key="value" label-key="label" color="neutral" variant="outline" placeholder="เลือก SO" :search-input="{ placeholder: 'Search SO...' }" class="w-full" :ui="adminSelectUi" />
               </UFormField>
 
-              <UFormField label="Invoice" required :ui="adminFieldUi">
-                <USelectMenu v-model="createInvoiceId" :items="invoiceOptions" value-key="value" label-key="label" color="neutral" variant="outline" placeholder="เลือก Invoice" :search-input="{ placeholder: 'Search invoice...' }" class="w-full" :ui="adminSelectUi" />
-              </UFormField>
-
               <UFormField label="Ship To" required :ui="adminFieldUi">
                 <USelectMenu v-model="createShipTo" :items="shipToOptions" value-key="value" label-key="label" color="neutral" variant="outline" :search-input="false" class="w-full" :ui="adminSelectUi" />
               </UFormField>
@@ -1241,13 +1223,9 @@ onBeforeUnmount(() => {
               </div>
             </template>
 
-            <div class="grid gap-4 lg:grid-cols-2 xl:grid-cols-4">
+            <div class="grid gap-4 lg:grid-cols-2 xl:grid-cols-3">
               <UFormField label="SO" required :ui="adminFieldUi">
                 <USelectMenu v-model="updateSalesOrderId" :items="salesOrderOptions" value-key="value" label-key="label" color="neutral" variant="outline" placeholder="เลือก SO" :search-input="{ placeholder: 'Search SO...' }" class="w-full" :ui="adminSelectUi" />
-              </UFormField>
-
-              <UFormField label="Invoice" required :ui="adminFieldUi">
-                <USelectMenu v-model="updateInvoiceId" :items="invoiceOptions" value-key="value" label-key="label" color="neutral" variant="outline" placeholder="เลือก Invoice" :search-input="{ placeholder: 'Search invoice...' }" class="w-full" :ui="adminSelectUi" />
               </UFormField>
 
               <UFormField label="Ship To" required :ui="adminFieldUi">

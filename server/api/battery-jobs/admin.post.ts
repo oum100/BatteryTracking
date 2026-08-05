@@ -14,7 +14,6 @@ import { requireAdminSession } from '../../utils/admin-auth'
 interface AdminCreateBatteryJobPayload {
   rackCount?: number | string | null
   salesOrderId?: string | null
-  invoiceId?: string | null
   plannedDeliveryDate?: string | null
   shipTo?: string | null
   notes?: string | null
@@ -31,12 +30,20 @@ export default defineEventHandler(async (event) => {
     ? Math.min(requestedRackCount, 200)
     : 1
   const salesOrderId = ensureOptionalText(body.salesOrderId)
-  const invoiceId = ensureOptionalText(body.invoiceId)
   const plannedDeliveryDate = ensureOptionalDate(body.plannedDeliveryDate)
   const shipTo = ensureOptionalShipTo(body.shipTo)
   const notes = ensureOptionalText(body.notes)
   const openedAt = new Date()
   const batchId = createBatteryJobBatchId()
+
+  if (salesOrderId) {
+    const salesOrder = await prisma.salesOrder.findFirst({
+      where: { id: salesOrderId, active: true },
+    })
+    if (!salesOrder) {
+      throw createError({ statusCode: 400, statusMessage: 'salesOrderId must reference an active SO' })
+    }
+  }
 
   const createdJobs = await prisma.$transaction(
     Array.from({ length: rackCount }, (_, index) => prisma.batteryJob.create({
@@ -47,7 +54,6 @@ export default defineEventHandler(async (event) => {
         rackId: index === 0 && rackCount === 1 ? createPendingRackId() : createPendingRackId(),
         openedAt,
         salesOrderId,
-        invoiceId,
         plannedDeliveryDate,
         shipTo,
         notes,
