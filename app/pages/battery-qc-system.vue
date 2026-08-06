@@ -838,6 +838,10 @@ const progressCount = computed(() => {
   return slots.filter((slot) => getPhaseVoltage(slot, phase.value) !== null)
     .length;
 });
+const batteryIdCount = computed(() => {
+  const slots = currentJob.value?.slots ?? [];
+  return slots.filter((slot) => slot.batteryId.trim()).length;
+});
 const canConfirmPhase = computed(
   () => currentJob.value !== null && progressCount.value === 21,
 );
@@ -859,29 +863,6 @@ const activeSlotCardClass = computed(() => {
   }
 
   return "border-amber-400 bg-amber-50 text-amber-950";
-});
-const workflowActionActiveClass = computed(() => {
-  if (phase.value === "BEFORE_CHARGE") {
-    return "bg-emerald-700 text-white hover:bg-emerald-800 active:bg-emerald-950";
-  }
-
-  if (phase.value === "AFTER_CHARGE") {
-    return "bg-sky-700 text-white hover:bg-sky-800 active:bg-sky-950";
-  }
-
-  return "bg-amber-600 text-white hover:bg-amber-700 active:bg-amber-900";
-});
-
-const workflowActionIdleClass = computed(() => {
-  if (phase.value === "BEFORE_CHARGE") {
-    return "border border-emerald-400 bg-emerald-50 text-emerald-950 hover:bg-emerald-200 active:bg-emerald-300";
-  }
-
-  if (phase.value === "AFTER_CHARGE") {
-    return "border border-sky-400 bg-sky-50 text-sky-950 hover:bg-sky-200 active:bg-sky-300";
-  }
-
-  return "border border-amber-400 bg-amber-50 text-amber-950 hover:bg-amber-200 active:bg-amber-300";
 });
 const isBatteryIdWorkflowEnabled = computed(
   () => phase.value === "BEFORE_CHARGE",
@@ -4027,90 +4008,149 @@ onBeforeUnmount(() => {
                   {{ currentJob?.rackId || "ยังไม่มี Rack" }}
                 </div>
               </div>
-              <div class="flex flex-wrap items-stretch justify-end gap-3">
+              <div class="flex w-full flex-col overflow-hidden rounded-[14px] border border-slate-200 bg-slate-50 xl:w-auto xl:max-w-[1120px] xl:flex-row">
                 <div
-                  class="flex flex-col justify-center rounded-[14px] border border-slate-200 bg-slate-50 px-4 py-3"
+                  class="flex min-w-0 flex-1 flex-col justify-center px-4 py-3"
                 >
                   <div class="text-sm font-black text-slate-700">
                     {{ workflowModeLabel }}
                   </div>
-                  <div class="mt-2 flex flex-wrap items-center gap-4">
-                    <UButton
-                      color="neutral"
-                      :variant="
-                        isBatteryWorkflowModeSelected ? 'solid' : 'soft'
-                      "
+                  <label
+                    v-if="isBatteryIdWorkflowEnabled"
+                    class="mt-3 flex cursor-pointer items-center gap-2 whitespace-nowrap text-xs font-black text-slate-700"
+                  >
+                      <UCheckbox v-model="checkDuplicateBatteryId" />
+                      Check duplicate ID
+                  </label>
+                </div>
+
+                <div class="w-full border-t border-slate-200 bg-white px-4 py-3 xl:w-[360px] xl:border-l xl:border-t-0">
+                  <div class="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">
+                    QC Progress
+                  </div>
+                  <div class="mt-2 grid grid-cols-2 gap-2">
+                    <button
+                      v-if="phase === 'BEFORE_CHARGE'"
+                      type="button"
                       :disabled="!canStartBatteryWorkflow"
-                      class="w-full sm:min-w-[180px] sm:w-auto justify-center rounded-full px-4 py-3 text-center text-sm font-black"
+                      :aria-pressed="isBatteryWorkflowModeSelected"
+                      class="relative rounded-[10px] px-2.5 py-2 text-left transition-all duration-150"
                       :class="
                         !canStartBatteryWorkflow
-                          ? 'border border-slate-300 bg-slate-100 text-slate-400'
+                          ? 'cursor-not-allowed bg-slate-100 text-slate-400'
                           : isBatteryWorkflowModeSelected
-                            ? workflowActionActiveClass
-                            : workflowActionIdleClass
+                            ? 'bg-emerald-100 ring-2 ring-emerald-500 shadow-sm'
+                            : 'bg-emerald-50 hover:-translate-y-0.5 hover:bg-emerald-100 hover:ring-1 hover:ring-emerald-300'
                       "
                       @click="startBatteryIdScanWorkflow"
                     >
-                      Battery ID
-                    </UButton>
-                    <UButton
-                      color="neutral"
-                      :variant="
-                        isVoltageWorkflowModeSelected ? 'solid' : 'soft'
-                      "
+                      <div class="flex items-center gap-2">
+                        <div
+                          class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-white"
+                          :class="isBatteryWorkflowModeSelected ? 'bg-emerald-700' : 'bg-emerald-600'"
+                        >
+                          <UIcon name="i-lucide-battery" class="h-4 w-4" />
+                        </div>
+                        <div class="min-w-0">
+                          <div class="text-[10px] font-bold uppercase tracking-[0.1em] text-emerald-800">
+                            Battery ID
+                          </div>
+                          <div class="text-lg font-black leading-none tabular-nums text-emerald-950">
+                            {{ batteryIdCount }}<span class="text-xs text-emerald-700/60"> / 21</span>
+                          </div>
+                        </div>
+                      </div>
+                      <UIcon
+                        v-if="isBatteryWorkflowModeSelected"
+                        name="i-lucide-circle-check"
+                        class="absolute right-2 top-2 h-4 w-4 text-emerald-700"
+                      />
+                      <div class="mt-1.5 h-1.5 overflow-hidden rounded-full bg-emerald-100">
+                        <div
+                          class="h-full rounded-full bg-emerald-600 transition-all duration-300"
+                          :style="{ width: `${Math.min((batteryIdCount / 21) * 100, 100)}%` }"
+                        />
+                      </div>
+                      <div class="mt-1 text-[10px] font-semibold text-emerald-800/75">
+                        เหลือ {{ 21 - batteryIdCount }} ก้อน
+                      </div>
+                    </button>
+
+                    <button
+                      type="button"
                       :disabled="!canStartVoltageWorkflow"
-                      class="w-full sm:min-w-[180px] sm:w-auto justify-center rounded-full px-4 py-3 text-center text-sm font-black"
-                      :class="
+                      :aria-pressed="isVoltageWorkflowModeSelected"
+                      class="relative rounded-[10px] px-2.5 py-2 text-left transition-all duration-150"
+                      :class="[
+                        phase !== 'BEFORE_CHARGE' ? 'col-span-2' : '',
                         !canStartVoltageWorkflow
-                          ? 'border border-slate-300 bg-slate-100 text-slate-400'
+                          ? 'cursor-not-allowed bg-slate-100 text-slate-400'
                           : isVoltageWorkflowModeSelected
-                            ? workflowActionActiveClass
-                            : workflowActionIdleClass
-                      "
+                            ? phase === 'BEFORE_CHARGE'
+                              ? 'bg-emerald-100 ring-2 ring-emerald-500 shadow-sm'
+                              : phase === 'AFTER_CHARGE'
+                                ? 'bg-sky-100 ring-2 ring-sky-500 shadow-sm'
+                                : 'bg-amber-100 ring-2 ring-amber-500 shadow-sm'
+                            : 'bg-slate-50 hover:-translate-y-0.5 hover:bg-slate-100 hover:ring-1 hover:ring-slate-300'
+                      ]"
                       @click="startVoltageWorkflow"
                     >
-                      Voltage
-                    </UButton>
-                    <label
-                      class="flex cursor-pointer items-center gap-2 whitespace-nowrap text-xs font-black text-slate-700"
-                    >
-                      <UCheckbox v-model="checkDuplicateBatteryId" />
-                      Check duplicate ID
-                    </label>
-                  </div>
-                </div>
-
-                <div
-                  class="w-full rounded-[14px] border border-slate-200 bg-white px-4 py-3 shadow-sm sm:w-auto"
-                >
-                  <div class="flex items-end justify-between gap-3">
-                    <div class="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">
-                      Voltage progress
-                    </div>
-                    <div class="text-2xl font-black tabular-nums text-slate-900">
-                      {{ progressCount }}<span class="text-base text-slate-400"> / 21</span>
-                    </div>
-                  </div>
-                  <div class="mt-2 h-2 overflow-hidden rounded-full bg-slate-100">
-                    <div
-                      class="h-full rounded-full transition-all duration-300"
-                      :class="
-                        phase === 'BEFORE_CHARGE'
-                          ? 'bg-emerald-600'
-                          : phase === 'AFTER_CHARGE'
-                            ? 'bg-sky-600'
-                            : 'bg-amber-500'
-                      "
-                      :style="{ width: `${Math.min((progressCount / 21) * 100, 100)}%` }"
-                    />
-                  </div>
-                  <div class="mt-2 text-xs font-semibold text-slate-500">
-                    <template v-if="progressCount < 21">
-                      รออ่านค่าอีก {{ 21 - progressCount }} ก้อน
-                    </template>
-                    <template v-else>
-                      อ่านค่าแรงดันครบแล้ว พร้อมยืนยันใบงาน
-                    </template>
+                      <div class="flex items-center gap-2">
+                        <div
+                          class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-white"
+                          :class="
+                            phase === 'BEFORE_CHARGE'
+                              ? 'bg-emerald-600'
+                              : phase === 'AFTER_CHARGE'
+                                ? 'bg-sky-600'
+                                : 'bg-amber-500'
+                          "
+                        >
+                          <UIcon name="i-lucide-zap" class="h-4 w-4" />
+                        </div>
+                        <div class="min-w-0">
+                          <div class="text-[10px] font-bold uppercase tracking-[0.1em] text-slate-600">
+                            Voltage
+                          </div>
+                          <div class="text-lg font-black leading-none tabular-nums text-slate-900">
+                            {{ progressCount }}<span class="text-xs text-slate-400"> / 21</span>
+                          </div>
+                        </div>
+                      </div>
+                      <UIcon
+                        v-if="isVoltageWorkflowModeSelected"
+                        name="i-lucide-circle-check"
+                        class="absolute right-2 top-2 h-4 w-4"
+                        :class="
+                          phase === 'BEFORE_CHARGE'
+                            ? 'text-emerald-700'
+                            : phase === 'AFTER_CHARGE'
+                              ? 'text-sky-700'
+                              : 'text-amber-700'
+                        "
+                      />
+                      <div class="mt-1.5 h-1.5 overflow-hidden rounded-full bg-slate-200">
+                        <div
+                          class="h-full rounded-full transition-all duration-300"
+                          :class="
+                            phase === 'BEFORE_CHARGE'
+                              ? 'bg-emerald-600'
+                              : phase === 'AFTER_CHARGE'
+                                ? 'bg-sky-600'
+                                : 'bg-amber-500'
+                          "
+                          :style="{ width: `${Math.min((progressCount / 21) * 100, 100)}%` }"
+                        />
+                      </div>
+                      <div class="mt-1 text-[10px] font-semibold text-slate-500">
+                        <template v-if="progressCount < 21">
+                          เหลือ {{ 21 - progressCount }} ก้อน
+                        </template>
+                        <template v-else>
+                          พร้อมยืนยันใบงาน
+                        </template>
+                      </div>
+                    </button>
                   </div>
                   <UButton
                     v-if="canConfirmPhase || isConfirming"
