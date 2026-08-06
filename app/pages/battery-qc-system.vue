@@ -173,6 +173,7 @@ const measurementPopupLabel = ref("Voltage Read");
 const measurementPopupContext = ref("");
 const measurementPopupKey = ref(0);
 const workflowActionMode = ref<"battery" | "voltage" | null>(null);
+const editingSlotInputMode = ref<"battery" | "voltage">("battery");
 const calibrateModalOpen = ref(false);
 const calibrateSubmitting = ref(false);
 const calibrateSyncing = ref(false);
@@ -904,6 +905,32 @@ const canStartBatteryWorkflow = computed(
   () => canStartWorkflow.value && isBatteryIdWorkflowEnabled.value,
 );
 const canStartVoltageWorkflow = computed(() => canStartWorkflow.value);
+const isBatteryWorkflowModeSelected = computed(
+  () =>
+    (detailModalOpen.value
+      ? editingSlotInputMode.value
+      : workflowActionMode.value) === "battery",
+);
+const isVoltageWorkflowModeSelected = computed(
+  () =>
+    (detailModalOpen.value
+      ? editingSlotInputMode.value
+      : workflowActionMode.value) === "voltage",
+);
+const workflowModeLabel = computed(() => {
+  const activeMode = detailModalOpen.value
+    ? editingSlotInputMode.value
+    : workflowActionMode.value;
+  const modeLabel = activeMode === "battery" ? "Battery ID" : "Voltage";
+
+  if (detailModalOpen.value) {
+    return `กำลังแก้ Slot ${editingSlotNumber.value ?? "-"} · ปิดแล้วจะ Scan ${modeLabel} ต่อเนื่อง`;
+  }
+
+  return activeMode
+    ? `Mode Scan ต่อเนื่อง: ${modeLabel}`
+    : "เลือก Mode Scan ต่อเนื่อง";
+});
 const phasePrimaryButtonClass = computed(() => {
   if (phase.value === "BEFORE_CHARGE") {
     return "bg-lime-50 text-lime-950 border border-lime-400 hover:bg-lime-200 active:bg-lime-300";
@@ -1633,9 +1660,7 @@ async function focusActiveModalField() {
     return;
   }
 
-  const activeMode =
-    workflowActionMode.value ??
-    getDefaultWorkflowActionMode(phase.value ?? "BEFORE_CHARGE");
+  const activeMode = editingSlotInputMode.value;
 
   if (activeMode === "battery") {
     const input = getFocusableInput("qc-battery-input");
@@ -2531,11 +2556,11 @@ function selectSlot(slotNumber: number) {
     return;
   }
 
-  if (!workflowActionMode.value) {
-    workflowActionMode.value = getDefaultWorkflowActionMode(
-      phase.value ?? "BEFORE_CHARGE",
-    );
-  }
+  editingSlotInputMode.value =
+    workflowActionMode.value ??
+    getDefaultWorkflowActionMode(phase.value ?? "BEFORE_CHARGE");
+  // Editing a single slot never implies that continuous scanning remains armed.
+  workflowActionMode.value = null;
   editingSlotNumber.value = slotNumber;
   syncModalSlotInputs();
   detailModalOpen.value = true;
@@ -2561,16 +2586,23 @@ function activateNextWorkflowSlot() {
 function closeSlotDetail() {
   detailModalOpen.value = false;
   editingSlotNumber.value = null;
+  workflowActionMode.value = editingSlotInputMode.value;
   activateNextModeSlot();
   syncWorkflowSlotInputs();
+  actionMessage.value =
+    workflowActionMode.value === "battery"
+      ? `กลับสู่การอ่าน Battery ID ต่อเนื่องที่ slot ${selectedSlotNumber.value}`
+      : `กลับสู่การอ่าน Voltage ต่อเนื่องที่ slot ${selectedSlotNumber.value}`;
   void restoreWorkflowFocus();
 }
 
 async function advanceToSlot(nextSlotNumber: number | null) {
   detailModalOpen.value = false;
   editingSlotNumber.value = null;
+  workflowActionMode.value = editingSlotInputMode.value;
 
   if (!nextSlotNumber) {
+    activateNextModeSlot();
     syncWorkflowSlotInputs();
     await restoreWorkflowFocus();
     return;
@@ -3950,18 +3982,20 @@ onBeforeUnmount(() => {
                   class="rounded-[14px] border border-slate-200 bg-slate-50 px-4 py-3"
                 >
                   <div class="flex flex-wrap items-center gap-4">
-                    <div class="text-sm font-black text-slate-950">Mode</div>
+                    <div class="text-sm font-black text-slate-700">
+                      {{ workflowModeLabel }}
+                    </div>
                     <UButton
                       color="neutral"
                       :variant="
-                        workflowActionMode === 'battery' ? 'solid' : 'soft'
+                        isBatteryWorkflowModeSelected ? 'solid' : 'soft'
                       "
                       :disabled="!canStartBatteryWorkflow"
                       class="min-w-[180px] justify-center rounded-full px-4 py-3 text-center text-sm font-black"
                       :class="
                         !canStartBatteryWorkflow
                           ? 'border border-slate-300 bg-slate-100 text-slate-400'
-                          : workflowActionMode === 'battery'
+                          : isBatteryWorkflowModeSelected
                             ? workflowActionActiveClass
                             : workflowActionIdleClass
                       "
@@ -3972,14 +4006,14 @@ onBeforeUnmount(() => {
                     <UButton
                       color="neutral"
                       :variant="
-                        workflowActionMode === 'voltage' ? 'solid' : 'soft'
+                        isVoltageWorkflowModeSelected ? 'solid' : 'soft'
                       "
                       :disabled="!canStartVoltageWorkflow"
                       class="min-w-[180px] justify-center rounded-full px-4 py-3 text-center text-sm font-black"
                       :class="
                         !canStartVoltageWorkflow
                           ? 'border border-slate-300 bg-slate-100 text-slate-400'
-                          : workflowActionMode === 'voltage'
+                          : isVoltageWorkflowModeSelected
                             ? workflowActionActiveClass
                             : workflowActionIdleClass
                       "
@@ -4506,7 +4540,13 @@ onBeforeUnmount(() => {
               <div class="grid grid-cols-[1fr_auto] items-start gap-4">
                 <div class="text-center">
                   <div
-                    class="text-sm font-bold uppercase tracking-[0.24em] text-slate-500"
+                    class="mx-auto inline-flex items-center gap-2 rounded-full bg-violet-100 px-3 py-1 text-xs font-black tracking-[0.16em] text-violet-900 ring-1 ring-violet-300"
+                  >
+                    <UIcon name="i-lucide-pencil-line" class="size-3.5" />
+                    EDITING INDIVIDUAL SLOT
+                  </div>
+                  <div
+                    class="mt-3 text-sm font-bold uppercase tracking-[0.24em] text-slate-500"
                   >
                     Active Slot
                   </div>
@@ -4542,9 +4582,9 @@ onBeforeUnmount(() => {
                   color="neutral"
                   variant="outline"
                   class="w-full"
-                  :readonly="workflowActionMode !== 'battery'"
+                  :readonly="editingSlotInputMode !== 'battery'"
                   :ui="{
-                    base: `h-14 rounded-[8px] border border-slate-300 px-4 text-base font-semibold uppercase ring-1 ring-inset transition focus:ring-2 focus:ring-inset ${workflowActionMode === 'battery' ? 'bg-white text-slate-950 ring-slate-300 hover:border-slate-400 hover:ring-slate-400 focus:border-slate-500 focus:ring-slate-400' : 'bg-slate-100 text-slate-400 ring-slate-200'}`,
+                    base: `h-14 rounded-[8px] border border-slate-300 px-4 text-base font-semibold uppercase ring-1 ring-inset transition focus:ring-2 focus:ring-inset ${editingSlotInputMode === 'battery' ? 'bg-white text-slate-950 ring-slate-300 hover:border-slate-400 hover:ring-slate-400 focus:border-slate-500 focus:ring-slate-400' : 'bg-slate-100 text-slate-400 ring-slate-200'}`,
                   }"
                   @keyup.enter="handleBatteryInput(batteryScanInput)"
                 />
@@ -4564,9 +4604,9 @@ onBeforeUnmount(() => {
                   color="neutral"
                   variant="outline"
                   class="w-full"
-                  :readonly="workflowActionMode !== 'voltage'"
+                  :readonly="editingSlotInputMode !== 'voltage'"
                   :ui="{
-                    base: `h-14 rounded-[8px] border border-slate-300 px-4 text-base font-semibold ring-1 ring-inset transition focus:ring-2 focus:ring-inset ${workflowActionMode === 'voltage' ? 'bg-white text-slate-950 ring-slate-300 hover:border-slate-400 hover:ring-slate-400 focus:border-slate-500 focus:ring-slate-400' : 'bg-slate-100 text-slate-400 ring-slate-200'}`,
+                    base: `h-14 rounded-[8px] border border-slate-300 px-4 text-base font-semibold ring-1 ring-inset transition focus:ring-2 focus:ring-inset ${editingSlotInputMode === 'voltage' ? 'bg-white text-slate-950 ring-slate-300 hover:border-slate-400 hover:ring-slate-400 focus:border-slate-500 focus:ring-slate-400' : 'bg-slate-100 text-slate-400 ring-slate-200'}`,
                   }"
                   @keyup.enter="handleVoltageReaderInput(voltageInput)"
                 />
