@@ -217,7 +217,7 @@ const modalCardUi = computed(() => ({
 const workspaceLabelClass = computed(() => isDarkMode.value ? 'text-slate-400' : 'text-slate-600')
 const headingClass = computed(() => isDarkMode.value ? 'text-slate-50' : 'text-slate-950')
 const bodyTextClass = computed(() => isDarkMode.value ? 'text-slate-300' : 'text-slate-700')
-const tableWrapClass = computed(() => isDarkMode.value ? 'mt-4 overflow-hidden rounded-[15px] border border-slate-700' : 'mt-4 overflow-hidden rounded-[15px] border border-slate-300 bg-white/92 shadow-[0_16px_32px_rgba(15,23,42,0.12)]')
+const tableWrapClass = computed(() => isDarkMode.value ? 'mt-4 overflow-x-auto rounded-[15px] border border-slate-700' : 'mt-4 overflow-x-auto rounded-[15px] border border-slate-300 bg-white/92 shadow-[0_16px_32px_rgba(15,23,42,0.12)]')
 
 const tableUi = computed(() => ({
   tbody: isDarkMode.value

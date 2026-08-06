@@ -3229,7 +3229,7 @@ onBeforeUnmount(() => {
             </div>
 
             <template v-if="jobDetailsCollapsed">
-              <div class="mt-3 grid gap-2 xl:grid-cols-6">
+              <div class="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-6">
                 <UInput
                   :model-value="currentJob?.jobRef || '-'"
                   readonly
@@ -3991,7 +3991,7 @@ onBeforeUnmount(() => {
                         isBatteryWorkflowModeSelected ? 'solid' : 'soft'
                       "
                       :disabled="!canStartBatteryWorkflow"
-                      class="min-w-[180px] justify-center rounded-full px-4 py-3 text-center text-sm font-black"
+                      class="w-full sm:min-w-[180px] sm:w-auto justify-center rounded-full px-4 py-3 text-center text-sm font-black"
                       :class="
                         !canStartBatteryWorkflow
                           ? 'border border-slate-300 bg-slate-100 text-slate-400'
@@ -4009,7 +4009,7 @@ onBeforeUnmount(() => {
                         isVoltageWorkflowModeSelected ? 'solid' : 'soft'
                       "
                       :disabled="!canStartVoltageWorkflow"
-                      class="min-w-[180px] justify-center rounded-full px-4 py-3 text-center text-sm font-black"
+                      class="w-full sm:min-w-[180px] sm:w-auto justify-center rounded-full px-4 py-3 text-center text-sm font-black"
                       :class="
                         !canStartVoltageWorkflow
                           ? 'border border-slate-300 bg-slate-100 text-slate-400'
@@ -4031,27 +4031,49 @@ onBeforeUnmount(() => {
                 </div>
 
                 <div
-                  class="rounded-[14px] border border-slate-200 bg-white px-4 py-3 shadow-sm"
+                  class="w-full rounded-[14px] border border-slate-200 bg-white px-4 py-3 shadow-sm sm:w-auto"
                 >
-                  <div
-                    class="text-xs font-bold uppercase tracking-[0.16em] text-slate-500"
-                  >
-                    Voltage {{ progressCount }} / 21
+                  <div class="flex items-end justify-between gap-3">
+                    <div class="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">
+                      Voltage progress
+                    </div>
+                    <div class="text-2xl font-black tabular-nums text-slate-900">
+                      {{ progressCount }}<span class="text-base text-slate-400"> / 21</span>
+                    </div>
+                  </div>
+                  <div class="mt-2 h-2 overflow-hidden rounded-full bg-slate-100">
+                    <div
+                      class="h-full rounded-full transition-all duration-300"
+                      :class="
+                        phase === 'BEFORE_CHARGE'
+                          ? 'bg-emerald-600'
+                          : phase === 'AFTER_CHARGE'
+                            ? 'bg-sky-600'
+                            : 'bg-amber-500'
+                      "
+                      :style="{ width: `${Math.min((progressCount / 21) * 100, 100)}%` }"
+                    />
+                  </div>
+                  <div class="mt-2 text-xs font-semibold text-slate-500">
+                    <template v-if="progressCount < 21">
+                      รออ่านค่าอีก {{ 21 - progressCount }} ก้อน
+                    </template>
+                    <template v-else>
+                      อ่านค่าแรงดันครบแล้ว พร้อมยืนยันใบงาน
+                    </template>
                   </div>
                   <UButton
+                    v-if="canConfirmPhase || isConfirming"
                     color="neutral"
                     variant="solid"
                     :loading="isConfirming"
-                    :disabled="!canConfirmPhase"
-                    class="mt-2 min-w-[230px] justify-center rounded-full px-4 py-3 text-sm font-black disabled:cursor-not-allowed"
+                    class="mt-3 w-full justify-center rounded-full px-4 py-3 text-sm font-black"
                     :class="
-                      canConfirmPhase
-                        ? phase === 'BEFORE_CHARGE'
-                          ? 'bg-emerald-700 text-white hover:bg-emerald-800 active:bg-emerald-900'
-                          : phase === 'AFTER_CHARGE'
-                            ? 'bg-sky-700 text-white hover:bg-sky-800 active:bg-sky-900'
-                            : 'bg-amber-600 text-white hover:bg-amber-700 active:bg-amber-900'
-                        : 'bg-slate-200 text-slate-500'
+                      phase === 'BEFORE_CHARGE'
+                        ? 'bg-emerald-700 text-white hover:bg-emerald-800 active:bg-emerald-900'
+                        : phase === 'AFTER_CHARGE'
+                          ? 'bg-sky-700 text-white hover:bg-sky-800 active:bg-sky-900'
+                          : 'bg-amber-600 text-white hover:bg-amber-700 active:bg-amber-900'
                     "
                     @click="confirmCurrentPhase"
                   >
@@ -4065,7 +4087,7 @@ onBeforeUnmount(() => {
               <div
                 v-for="(row, rowIndex) in slotRows"
                 :key="rowIndex"
-                class="grid grid-cols-7 gap-2"
+                class="grid grid-cols-1 gap-2 sm:grid-cols-4 lg:grid-cols-7"
               >
                 <UButton
                   v-for="slot in row"
@@ -4195,7 +4217,7 @@ onBeforeUnmount(() => {
         :close="false"
         :content="{
           class:
-            'w-[min(68vw,920px)] max-w-none rounded-[24px] bg-white shadow-[0_24px_80px_rgba(15,23,42,0.28)]',
+            'w-[calc(100vw-2rem)] max-w-none rounded-[24px] bg-white shadow-[0_24px_80px_rgba(15,23,42,0.28)] sm:w-[min(68vw,920px)]',
         }"
         :ui="{
           body: 'max-h-[88vh] overflow-y-auto p-6',
@@ -4527,7 +4549,7 @@ onBeforeUnmount(() => {
         :close="false"
         :content="{
           class:
-            'w-[min(50vw,740px)] max-w-none rounded-[24px] bg-white shadow-[0_24px_80px_rgba(15,23,42,0.28)]',
+            'w-[calc(100vw-2rem)] max-w-none rounded-[24px] bg-white shadow-[0_24px_80px_rgba(15,23,42,0.28)] sm:w-[min(92vw,740px)]',
         }"
         :ui="{
           body: 'max-h-[88vh] overflow-y-auto p-6',
@@ -4619,10 +4641,10 @@ onBeforeUnmount(() => {
       <div
         v-if="measurementPopupOpen"
         :key="measurementPopupKey"
-        class="pointer-events-none fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/28 px-6 backdrop-blur-[1px]"
+        class="pointer-events-none fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/28 px-4 backdrop-blur-[1px]"
       >
         <div
-          class="min-w-[320px] max-w-[min(42vw,680px)] rounded-[18px] bg-slate-950/96 px-8 py-6 text-center text-white shadow-[0_30px_80px_rgba(15,23,42,0.5)] ring-1 ring-white/15"
+          class="w-full max-w-[min(92vw,680px)] rounded-[18px] bg-slate-950/96 px-5 py-5 text-center text-white shadow-[0_30px_80px_rgba(15,23,42,0.5)] ring-1 ring-white/15 sm:px-8 sm:py-6"
         >
           <div
             class="text-sm font-bold uppercase tracking-[0.22em] text-emerald-200"

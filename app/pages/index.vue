@@ -67,7 +67,7 @@ const historyLinks = [
 </script>
 
 <template>
-  <main class="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(217,249,157,0.5),_transparent_42%),linear-gradient(180deg,_#f7faef_0%,_#eef4e1_100%)] px-6 py-8 sm:px-8">
+  <main class="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(217,249,157,0.5),_transparent_42%),linear-gradient(180deg,_#f7faef_0%,_#eef4e1_100%)] px-4 py-5 sm:px-8 sm:py-8">
     <div class="mx-auto flex min-h-[calc(100vh-4rem)] w-full max-w-3xl items-center">
       <UCard
         class="w-full rounded-[28px] border-0 bg-white/92 shadow-[0_24px_70px_rgba(70,95,32,0.14)] ring-1 ring-lime-950/8 backdrop-blur"

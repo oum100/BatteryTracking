@@ -40,7 +40,7 @@ const sizeUi = computed(() => {
       header: 'gap-5 px-6 py-4',
       iconWrap: 'h-14 w-14',
       icon: 'h-12 w-12',
-      slotText: 'text-[2.3rem]',
+      slotText: 'text-[2.3rem] tracking-[-0.04em]',
       status: 'px-3 py-1 text-xs',
       body: 'px-8 pb-7 pt-6',
       battId: 'text-[3.8rem]',
@@ -54,17 +54,17 @@ const sizeUi = computed(() => {
   if (props.size === 'overview') {
     return {
       root: 'rounded-[0.85rem] border-2',
-      header: 'gap-1 px-2 py-1',
-      iconWrap: 'h-5 w-5',
-      icon: 'h-4 w-4',
-      slotText: 'text-[0.8rem]',
-      status: 'px-1.5 py-0.5 text-[7px]',
-      body: 'px-2 pb-1.5 pt-1.5',
-      battId: 'text-[0.85rem]',
-      metrics: 'mt-1 gap-1',
-      circle: 'h-12 w-12',
-      metricIcon: 'h-4 w-4',
-      metricValue: '-mt-0.5 text-[0.75rem]',
+      header: 'gap-2 px-3 py-2 sm:gap-1 sm:px-2 sm:py-1',
+      iconWrap: 'h-6 w-6 sm:h-5 sm:w-5',
+      icon: 'h-5 w-5 sm:h-4 sm:w-4',
+      slotText: 'text-[1.05rem] tracking-[0.06em] sm:text-[0.8rem] sm:tracking-[0.02em]',
+      status: 'px-2 py-1 text-[8px] sm:px-1.5 sm:py-0.5 sm:text-[7px]',
+      body: 'px-3 pb-3 pt-2.5 sm:px-2 sm:pb-1.5 sm:pt-1.5',
+      battId: 'text-xl sm:text-[0.85rem]',
+      metrics: 'mt-2 gap-2 sm:mt-1 sm:gap-1',
+      circle: 'h-16 w-16 sm:h-12 sm:w-12',
+      metricIcon: 'h-5 w-5 sm:h-4 sm:w-4',
+      metricValue: '-mt-0.5 text-base sm:text-[0.75rem]',
     }
   }
 
@@ -73,7 +73,7 @@ const sizeUi = computed(() => {
     header: 'gap-1.5 px-2.5 py-1.5',
     iconWrap: 'h-7 w-7',
     icon: 'h-5 w-5',
-    slotText: 'text-[1rem]',
+    slotText: 'text-[1rem] tracking-[-0.04em]',
     status: 'px-2 py-0.5 text-[8px]',
     body: 'px-3 pb-2 pt-2',
     battId: 'text-[1.05rem]',
@@ -121,8 +121,8 @@ function metricValueClass(metric: SlotMetric) {
         <UIcon :name="headerIcon" :class="sizeUi.icon" />
       </div>
 
-      <div class="min-w-0 flex-1 text-center font-black tracking-[-0.04em]" :class="sizeUi.slotText">
-        SLOT:{{ String(slotId).padStart(2, '0') }}
+      <div class="min-w-0 flex-1 text-center font-black tabular-nums" :class="sizeUi.slotText">
+        SLOT {{ String(slotId).padStart(2, '0') }}
       </div>
 
       <div class="ml-auto flex min-w-[58px] justify-end">

@@ -759,7 +759,7 @@ async function submitCalibrationToDbAndBle() {
             >
             <h2 class="font-black text-slate-950">ค่าเดิมและ Device</h2>
           </div>
-          <div class="mt-4 grid grid-cols-3 gap-2 text-xs">
+          <div class="mt-4 grid gap-2 text-xs sm:grid-cols-3">
             <div class="rounded-[8px] bg-slate-100 p-3">
               <div class="font-bold text-slate-500">Device</div>
               <div class="mt-1 break-all font-black text-slate-950">
