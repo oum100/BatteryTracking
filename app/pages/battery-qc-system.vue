@@ -3614,12 +3614,6 @@ onBeforeUnmount(() => {
                 Rack # และ QC Job ถูกล็อกแล้วหลังเริ่มบันทึก slot แต่ยังแก้ Emp
                 ID, Charge Channel และ Charge Program ได้จนกว่าจะ Confirm
               </div>
-              <div
-                v-else-if="jobHasRecordedSlotData && canEditRackDuringBeforeCharge"
-                class="mt-3 rounded-[14px] border border-sky-300 bg-sky-50 px-4 py-3 text-sm font-semibold text-sky-950"
-              >
-                ระหว่าง QC Before Charge ยังแก้ Rack # ได้จนกว่าจะ Confirm phase นี้
-              </div>
             </template>
 
             <template v-else>
@@ -3966,7 +3960,7 @@ onBeforeUnmount(() => {
               body: 'p-4',
             }"
           >
-            <div class="flex flex-wrap items-center justify-between gap-3">
+            <div class="flex flex-wrap items-stretch justify-between gap-3">
               <div>
                 <div
                   class="text-xs font-bold uppercase tracking-[0.2em] text-slate-500"
@@ -3977,14 +3971,14 @@ onBeforeUnmount(() => {
                   {{ currentJob?.rackId || "ยังไม่มี Rack" }}
                 </div>
               </div>
-              <div class="flex flex-wrap items-center justify-end gap-3">
+              <div class="flex flex-wrap items-stretch justify-end gap-3">
                 <div
-                  class="rounded-[14px] border border-slate-200 bg-slate-50 px-4 py-3"
+                  class="flex flex-col justify-center rounded-[14px] border border-slate-200 bg-slate-50 px-4 py-3"
                 >
-                  <div class="flex flex-wrap items-center gap-4">
-                    <div class="text-sm font-black text-slate-700">
-                      {{ workflowModeLabel }}
-                    </div>
+                  <div class="text-sm font-black text-slate-700">
+                    {{ workflowModeLabel }}
+                  </div>
+                  <div class="mt-2 flex flex-wrap items-center gap-4">
                     <UButton
                       color="neutral"
                       :variant="
