@@ -294,10 +294,40 @@ async function refreshCurrentJobFromServer() {
 
   isRefreshingCurrentJob = true;
   try {
+    const activeMode = workflowActionMode.value;
+    const activeSlotNumber = selectedSlotNumber.value;
+    const activeSlotBeforeRefresh = currentJob.value.slots.find(
+      (slot) => slot.slotNumber === activeSlotNumber,
+    );
+    const activeSlotWasPending = activeMode === "battery"
+      ? Boolean(activeSlotBeforeRefresh && !activeSlotBeforeRefresh.batteryId.trim())
+      : Boolean(
+          activeMode === "voltage" &&
+            activeSlotBeforeRefresh &&
+            phase.value &&
+            getPhaseVoltage(activeSlotBeforeRefresh, phase.value) === null,
+        );
     const response = await $fetch<{ job: BatteryJobRecord }>(
       `/api/battery-jobs/${currentJob.value.id}`,
     );
     applyJob(response.job);
+
+    const activeSlotAfterRefresh = currentJob.value?.slots.find(
+      (slot) => slot.slotNumber === activeSlotNumber,
+    );
+    const activeSlotIsStillPending = activeMode === "battery"
+      ? Boolean(activeSlotAfterRefresh && !activeSlotAfterRefresh.batteryId.trim())
+      : Boolean(
+          activeMode === "voltage" &&
+            activeSlotAfterRefresh &&
+            phase.value &&
+            getPhaseVoltage(activeSlotAfterRefresh, phase.value) === null,
+        );
+
+    // Mirror another device's completed scan by advancing this screen's active Slot.
+    if (activeMode && activeSlotWasPending && !activeSlotIsStillPending) {
+      activateNextModeSlot();
+    }
   } catch {
     // A later polling cycle will retry; transient network errors should not interrupt QC.
   } finally {
