@@ -82,7 +82,7 @@ const historyLinks = [
               <UBadge class="rounded-full bg-slate-800 px-4 py-2 text-sm font-bold tracking-[0.22em] text-white">
                 BatteryTracking
               </UBadge>
-              <p class="text-xs font-black uppercase tracking-[0.18em] text-slate-500">Version 1.0.5</p>
+              <p class="text-xs font-black uppercase tracking-[0.18em] text-slate-500">Version 1.0.6</p>
             </div>
 
             <div class="space-y-2">

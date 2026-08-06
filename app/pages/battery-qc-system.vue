@@ -1580,6 +1580,10 @@ async function focusRackInputAfterMenuClose() {
   }
 }
 
+function selectRackInputValue(event: FocusEvent | MouseEvent) {
+  (event.target as HTMLInputElement | null)?.select();
+}
+
 async function focusQcJobInputAfterPhaseSelect() {
   await nextTick();
 
@@ -1606,6 +1610,20 @@ function backToPhaseLanding() {
   phase.value = null;
   resetPhaseContext();
   actionMessage.value = "เลือกโหมด QC เพื่อเริ่มงาน";
+}
+
+async function resetBeforeChargeJobDetails() {
+  if (phase.value !== "BEFORE_CHARGE") {
+    return;
+  }
+
+  rackId.value = "";
+  operatorId.value = "";
+  employeeScanInput.value = "";
+  chargeChannelId.value = "";
+  jobDetailsSaved.value = false;
+  actionMessage.value = "ล้าง Rack #, Emp ID และ Charge Channel แล้ว";
+  await focusRackInputAfterMenuClose();
 }
 
 async function focusActiveModalField() {
@@ -3155,6 +3173,17 @@ onBeforeUnmount(() => {
                   Workflow Active
                 </div>
                 <UButton
+                  v-if="phase === 'BEFORE_CHARGE'"
+                  color="neutral"
+                  variant="outline"
+                  icon="i-lucide-rotate-ccw"
+                  :disabled="isBusy || isSavingBattery || isMeasuring"
+                  class="rounded-full px-4 py-2 text-sm font-black"
+                  @click="resetBeforeChargeJobDetails"
+                >
+                  Clear
+                </UButton>
+                <UButton
                   color="neutral"
                   variant="solid"
                   :loading="isBusy"
@@ -3382,6 +3411,8 @@ onBeforeUnmount(() => {
                       spellcheck="false"
                       lang="en"
                       @update:model-value="rackId = sanitizeRackInput($event)"
+                      @focus="selectRackInputValue"
+                      @click="selectRackInputValue"
                       @keyup.enter="handleRackInput(rackId)"
                     />
                     <UPopover v-model:open="rackPickerOpen">
@@ -3713,6 +3744,8 @@ onBeforeUnmount(() => {
                       spellcheck="false"
                       lang="en"
                       @update:model-value="rackId = sanitizeRackInput($event)"
+                      @focus="selectRackInputValue"
+                      @click="selectRackInputValue"
                       @keyup.enter="handleRackInput(rackId)"
                     />
                     <UPopover v-model:open="rackPickerOpen">
