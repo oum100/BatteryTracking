@@ -259,6 +259,8 @@ const phaseQueueCounts = ref<PhaseQueueCounts>({
   delivery: null,
 });
 let phaseQueueRefreshTimer: ReturnType<typeof setInterval> | null = null;
+let currentJobRefreshTimer: ReturnType<typeof setInterval> | null = null;
+let isRefreshingCurrentJob = false;
 
 function getPhaseQueueCount(targetPhase: JobPhase) {
   if (targetPhase === "BEFORE_CHARGE")
@@ -272,6 +274,35 @@ async function loadPhaseQueueCounts() {
     "/api/battery-jobs/queue",
   );
   phaseQueueCounts.value = response.queues;
+}
+
+async function refreshCurrentJobFromServer() {
+  if (
+    !import.meta.client ||
+    !currentJob.value ||
+    isRefreshingCurrentJob ||
+    document.visibilityState !== "visible" ||
+    isBusy.value ||
+    isSavingBattery.value ||
+    isMeasuring.value ||
+    isConfirming.value ||
+    detailModalOpen.value ||
+    hasEditableJobDetailsChanges.value
+  ) {
+    return;
+  }
+
+  isRefreshingCurrentJob = true;
+  try {
+    const response = await $fetch<{ job: BatteryJobRecord }>(
+      `/api/battery-jobs/${currentJob.value.id}`,
+    );
+    applyJob(response.job);
+  } catch {
+    // A later polling cycle will retry; transient network errors should not interrupt QC.
+  } finally {
+    isRefreshingCurrentJob = false;
+  }
 }
 
 const currentPhaseMeta = computed(
@@ -1182,11 +1213,24 @@ function openMeasurementPopup(duration = FEEDBACK_POPUP_DURATION) {
   setTimeout(reopen, 0);
 }
 
+async function revealActiveSlotOnMobile() {
+  if (
+    typeof window === "undefined" ||
+    !window.matchMedia("(max-width: 639px)").matches
+  ) {
+    return;
+  }
+
+  await nextTick();
+  document
+    .getElementById(`qc-slot-${selectedSlotNumber.value}`)
+    ?.scrollIntoView({ behavior: "smooth", block: "center", inline: "nearest" });
+}
+
 async function revealRackLayout() {
   await nextTick();
 
-  // This is the only intentional page movement: reveal a newly opened rack once.
-  // Scanner reads keep the current viewport and never call this helper.
+  // Reveal a newly opened rack once; scanner progress scrolls only on mobile.
   jobDetailsCard.value?.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
@@ -3076,6 +3120,9 @@ onMounted(async () => {
     phaseQueueRefreshTimer = setInterval(() => {
       void loadPhaseQueueCounts();
     }, 30_000);
+    currentJobRefreshTimer = setInterval(() => {
+      void refreshCurrentJobFromServer();
+    }, 3_000);
     await tryAutoReconnectBleVoltMeter();
   } catch (error) {
     loadError.value =
@@ -3087,6 +3134,9 @@ onBeforeUnmount(() => {
   if (phaseQueueRefreshTimer) {
     clearInterval(phaseQueueRefreshTimer);
   }
+  if (currentJobRefreshTimer) {
+    clearInterval(currentJobRefreshTimer);
+  }
 });
 
 watch([detailModalOpen, workflowActionMode], async ([isOpen]) => {
@@ -3096,6 +3146,12 @@ watch([detailModalOpen, workflowActionMode], async ([isOpen]) => {
   }
 
   await focusActiveModalField();
+});
+
+watch([selectedSlotNumber, detailModalOpen, workflowActionMode], ([, isModalOpen, mode]) => {
+  if (!isModalOpen && mode) {
+    void revealActiveSlotOnMobile();
+  }
 });
 
 watch(
@@ -4651,7 +4707,7 @@ onBeforeUnmount(() => {
           >
             {{ measurementPopupContext }}
           </div>
-          <div class="mt-3 text-5xl font-black tracking-tight">
+          <div class="mt-3 max-w-full break-all text-[clamp(1.75rem,9vw,2.5rem)] font-black leading-tight tracking-tight sm:break-normal sm:text-5xl">
             {{ measurementPopupValue }}
           </div>
           <div
