@@ -8,7 +8,7 @@ import {
   isBatteryJobLocked,
   jobHasRecordedSlotData,
 } from '../../../utils/battery-jobs'
-import { requireAdminSession } from '../../../utils/admin-auth'
+import { requireQcOperationsSession } from '../../../utils/admin-auth'
 
 interface AdminBatteryJobPayload {
   scope?: 'JOB' | 'GROUP' | string | null
@@ -21,7 +21,7 @@ interface AdminBatteryJobPayload {
 }
 
 export default defineEventHandler(async (event) => {
-  await requireAdminSession(event)
+  await requireQcOperationsSession(event)
 
   const id = getRouterParam(event, 'id')
 

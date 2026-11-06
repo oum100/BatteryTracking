@@ -17,6 +17,6 @@ export default defineNuxtRouteMiddleware(async (to) => {
     // Redirect below.
   }
 
-  const redirect = encodeURIComponent(to.fullPath || '/battery-qc-admin')
+  const redirect = encodeURIComponent(to.fullPath || '/qc-operation')
   return navigateTo(`/admin-login?redirect=${redirect}`)
 })

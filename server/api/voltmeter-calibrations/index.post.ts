@@ -51,7 +51,7 @@ function ensureSource(value: unknown) {
 }
 
 export default defineEventHandler(async (event) => {
-  await requireUserRole(event, ['ADMIN', 'CALIBRATOR'])
+  await requireUserRole(event, ['CALIBRATOR'])
   const body = await readBody<CalibrationPayload>(event)
 
   const deviceId = ensureText(body.deviceId, 'deviceId')

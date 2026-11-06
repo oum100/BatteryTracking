@@ -1,4 +1,5 @@
 <script setup lang="ts">
+definePageMeta({ middleware: 'qc-workspace-auth' })
 type JobPhase = 'BEFORE_CHARGE' | 'AFTER_CHARGE' | 'DELIVERY'
 
 interface BatteryJobSlot {
@@ -426,7 +427,7 @@ function refreshReports() {
           <div class="flex items-end">
             <div class="flex flex-wrap items-stretch justify-start gap-2 sm:justify-end">
               <UButton
-                to="/battery-qc-admin"
+                to="/qc-operation"
                 size="sm"
                 color="neutral"
                 variant="soft"
@@ -483,8 +484,8 @@ function refreshReports() {
           body: 'p-3 sm:p-4'
         }"
       >
-            <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-7">
-          <div class="rounded-[14px] border border-slate-200 bg-slate-50 px-4 py-1">
+            <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-[minmax(270px,2fr)_minmax(125px,0.9fr)_minmax(125px,0.9fr)_minmax(145px,1fr)_minmax(110px,0.8fr)_minmax(165px,1.1fr)_minmax(90px,0.7fr)]">
+          <div class="min-w-0 rounded-[14px] border border-slate-200 bg-slate-50 px-4 py-1">
             <div class="text-[14px] font-normal tracking-[0.08em] text-slate-500">Job #</div>
             <USelectMenu
               v-model="selectedJobId"
@@ -499,42 +500,45 @@ function refreshReports() {
               :search-input="{ placeholder: 'Search job...' }"
               class="mt-1 w-full"
               :ui="{
-                base: 'h-[40px] w-full rounded-[12px] border-slate-200 bg-white px-3 text-[0.95rem] font-bold text-slate-950',
+                base: 'min-h-[40px] h-auto w-full rounded-[12px] border-slate-200 bg-white px-3 py-1 text-left text-[0.95rem] font-bold text-slate-950',
+                value: '!whitespace-nowrap !overflow-visible text-left',
+                placeholder: '!whitespace-nowrap !overflow-visible text-left',
                 content: 'rounded-[12px]',
                 viewport: 'max-h-[200px]',
-                item: 'text-sm text-slate-900'
+                item: 'text-sm text-slate-900',
+                itemLabel: 'whitespace-nowrap'
               }"
             />
           </div>
 
-          <div class="rounded-[14px] border border-slate-200 bg-slate-50 px-4 py-1">
+          <div class="min-w-0 rounded-[14px] border border-slate-200 bg-slate-50 px-4 py-1">
             <div class="text-[14px] font-normal tracking-[0.08em] text-slate-500">SO #</div>
-            <div class="mt-1 flex h-[40px] items-center text-[0.95rem] font-bold tracking-tight text-slate-950">{{ selectedJob.salesOrderNumber || '-' }}</div>
+            <div class="mt-1 flex min-h-[40px] items-center whitespace-nowrap py-1 text-[0.95rem] font-bold leading-5 tracking-tight text-slate-950">{{ selectedJob.salesOrderNumber || '-' }}</div>
           </div>
 
-          <div class="rounded-[14px] border border-slate-200 bg-slate-50 px-4 py-1">
+          <div class="min-w-0 rounded-[14px] border border-slate-200 bg-slate-50 px-4 py-1">
             <div class="text-[14px] font-normal tracking-[0.08em] text-slate-500">Invoice #</div>
-            <div class="mt-1 flex h-[40px] items-center text-[0.95rem] font-bold tracking-tight text-slate-950">{{ selectedJob.invoiceNumber || '-' }}</div>
+            <div class="mt-1 flex min-h-[40px] items-center whitespace-nowrap py-1 text-[0.95rem] font-bold leading-5 tracking-tight text-slate-950">{{ selectedJob.invoiceNumber || '-' }}</div>
           </div>
 
-          <div class="rounded-[14px] border border-slate-200 bg-slate-50 px-4 py-1">
+          <div class="min-w-0 rounded-[14px] border border-slate-200 bg-slate-50 px-4 py-1">
             <div class="text-[14px] font-normal tracking-[0.08em] text-slate-500">Delivery Date</div>
-            <div class="mt-1 flex h-[40px] items-center text-[0.95rem] font-bold tracking-tight text-slate-950">{{ formatDateOnly(selectedJob.plannedDeliveryDate) }}</div>
+            <div class="mt-1 flex min-h-[40px] items-center whitespace-nowrap py-1 text-[0.95rem] font-bold leading-5 tracking-tight text-slate-950">{{ formatDateOnly(selectedJob.plannedDeliveryDate) }}</div>
           </div>
 
-          <div class="rounded-[14px] border border-slate-200 bg-slate-50 px-4 py-1">
+          <div class="min-w-0 rounded-[14px] border border-slate-200 bg-slate-50 px-4 py-1">
             <div class="text-[14px] font-normal tracking-[0.08em] text-slate-500">Channel</div>
-            <div class="mt-1 flex h-[40px] items-center text-[0.95rem] font-bold tracking-tight text-slate-950">{{ selectedJob.chargeChannelName || '-' }}</div>
+            <div class="mt-1 flex min-h-[40px] items-center whitespace-nowrap py-1 text-[0.95rem] font-bold leading-5 tracking-tight text-slate-950">{{ selectedJob.chargeChannelName || '-' }}</div>
           </div>
 
-          <div class="rounded-[14px] border border-slate-200 bg-slate-50 px-4 py-1">
+          <div class="min-w-0 rounded-[14px] border border-slate-200 bg-slate-50 px-4 py-1">
             <div class="text-[14px] font-normal tracking-[0.08em] text-slate-500">Program Charge</div>
-            <div class="mt-1 flex h-[40px] items-center text-[0.95rem] font-bold tracking-tight text-slate-950">{{ selectedJob.chargeProgramName || '-' }}</div>
+            <div class="mt-1 flex min-h-[40px] items-center whitespace-nowrap py-1 text-[0.95rem] font-bold leading-5 tracking-tight text-slate-950">{{ selectedJob.chargeProgramName || '-' }}</div>
           </div>
 
-          <div class="rounded-[14px] border border-slate-200 bg-slate-50 px-4 py-1">
+          <div class="min-w-0 rounded-[14px] border border-slate-200 bg-slate-50 px-4 py-1">
             <div class="text-[14px] font-normal tracking-[0.08em] text-slate-500">Ship to</div>
-            <div class="mt-1 flex h-[40px] items-center text-[0.95rem] font-bold tracking-tight text-slate-950">{{ selectedJob.shipTo || '-' }}</div>
+            <div class="mt-1 flex min-h-[40px] items-center whitespace-nowrap py-1 text-[0.95rem] font-bold leading-5 tracking-tight text-slate-950">{{ selectedJob.shipTo || '-' }}</div>
           </div>
         </div>
       </UCard>

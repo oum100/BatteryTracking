@@ -9,7 +9,7 @@ import {
   ensureOptionalText,
   formatBatteryJob,
 } from '../../utils/battery-jobs'
-import { requireAdminSession } from '../../utils/admin-auth'
+import { requireQcOperationsSession } from '../../utils/admin-auth'
 
 interface AdminCreateBatteryJobPayload {
   rackCount?: number | string | null
@@ -20,7 +20,7 @@ interface AdminCreateBatteryJobPayload {
 }
 
 export default defineEventHandler(async (event) => {
-  await requireAdminSession(event)
+  await requireQcOperationsSession(event)
 
   const body = await readBody<AdminCreateBatteryJobPayload>(event)
   const requestedRackCount = typeof body.rackCount === 'number'

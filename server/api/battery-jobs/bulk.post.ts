@@ -1,6 +1,6 @@
 import { prisma } from '../../utils/prisma'
 import { allSlotsMeasured, batteryJobInclude, ensureOptionalDate, ensureOptionalShipTo, ensureOptionalText, isBatteryJobLocked, jobHasRecordedSlotData } from '../../utils/battery-jobs'
-import { requireAdminSession } from '../../utils/admin-auth'
+import { requireQcOperationsSession } from '../../utils/admin-auth'
 
 interface BulkPayload {
   action?: 'UPDATE' | 'DELETE' | 'SET_SHIPPED' | string
@@ -12,7 +12,7 @@ interface BulkPayload {
 }
 
 export default defineEventHandler(async (event) => {
-  await requireAdminSession(event)
+  await requireQcOperationsSession(event)
 
   const body = await readBody<BulkPayload>(event)
   const action = String(body.action ?? '').trim().toUpperCase()

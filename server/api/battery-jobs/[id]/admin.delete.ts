@@ -1,13 +1,13 @@
 import { prisma } from '../../../utils/prisma'
 import { isBatteryJobLocked, jobHasRecordedSlotData } from '../../../utils/battery-jobs'
-import { requireAdminSession } from '../../../utils/admin-auth'
+import { requireQcOperationsSession } from '../../../utils/admin-auth'
 
 interface DeleteBatteryJobPayload {
   scope?: 'JOB' | 'GROUP' | string | null
 }
 
 export default defineEventHandler(async (event) => {
-  await requireAdminSession(event)
+  await requireQcOperationsSession(event)
 
   const id = getRouterParam(event, 'id')
 

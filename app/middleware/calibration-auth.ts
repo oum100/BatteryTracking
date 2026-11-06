@@ -2,7 +2,7 @@ export default defineNuxtRouteMiddleware(async (to) => {
   try {
     const headers = process.server ? useRequestHeaders(['cookie']) : undefined
     const response = await $fetch<{ authenticated: boolean, user: { role: string } | null }>('/api/auth/session', { headers })
-    if (response.authenticated && ['ADMIN', 'CALIBRATOR'].includes(response.user?.role || '')) {
+    if (response.authenticated && response.user?.role === 'CALIBRATOR') {
       return
     }
   }

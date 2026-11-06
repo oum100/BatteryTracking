@@ -2,7 +2,7 @@ import { prisma } from '../../utils/prisma'
 import { requireUserRole } from '../../utils/user-auth'
 
 export default defineEventHandler(async (event) => {
-  await requireUserRole(event, ['ADMIN', 'CALIBRATOR'])
+  await requireUserRole(event, ['CALIBRATOR'])
   const query = getQuery(event)
   const deviceId = String(query.deviceId ?? '').trim()
   const requestedSource = String(query.source ?? 'INA226').trim().toUpperCase()

@@ -1,9 +1,9 @@
 import { prisma } from '../../../utils/prisma'
 import { batteryJobInclude, formatBatteryJob } from '../../../utils/battery-jobs'
-import { requireAdminSession } from '../../../utils/admin-auth'
+import { requireQcOperationsSession } from '../../../utils/admin-auth'
 
 export default defineEventHandler(async (event) => {
-  await requireAdminSession(event)
+  await requireQcOperationsSession(event)
 
   const id = getRouterParam(event, 'id')
   if (!id) {

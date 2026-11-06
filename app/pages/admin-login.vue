@@ -7,9 +7,19 @@ const errorMessage = ref('')
 const colorMode = useColorMode()
 
 const redirectTarget = computed(() => {
-  const raw = typeof route.query.redirect === 'string' ? route.query.redirect : '/battery-qc-admin'
-  return raw.startsWith('/') ? raw : '/battery-qc-admin'
+  const raw = typeof route.query.redirect === 'string' ? route.query.redirect : '/qc-operation'
+  return raw.startsWith('/') ? raw : '/qc-operation'
 })
+
+function canAccessTarget(role: string | undefined) {
+  const path = redirectTarget.value
+  if (path === '/battery-qc-system') return ['ADMIN', 'STAFF'].includes(role || '')
+  if (path === '/qc-operation') return ['ADMIN', 'OFFICER'].includes(role || '')
+  if (['/qc-report', '/qc-group-report'].includes(path)) return ['ADMIN', 'OFFICER'].includes(role || '')
+  if (path === '/battery-qc-calibration') return role === 'CALIBRATOR'
+  if (path === '/battery-qc-settings') return role === 'ADMIN'
+  return true
+}
 
 const isDarkMode = computed({
   get: () => colorMode.value === 'dark',
@@ -87,9 +97,8 @@ async function loadSessionStatus() {
   const response = await $fetch<{ authenticated: boolean, user: { role: string } | null }>('/api/auth/session')
 
   if (response.authenticated) {
-    const requiresAdmin = redirectTarget.value === '/battery-qc-admin' || redirectTarget.value === '/battery-qc-settings'
-    if (requiresAdmin && response.user?.role !== 'ADMIN') {
-      errorMessage.value = 'บัญชีนี้ไม่มีสิทธิ์เข้า Admin Workspace'
+    if (!canAccessTarget(response.user?.role)) {
+      errorMessage.value = 'บัญชีนี้ไม่มีสิทธิ์เข้าหน้านี้'
       return
     }
 
@@ -112,13 +121,18 @@ async function submitAdminLogin() {
   errorMessage.value = ''
 
   try {
-    await $fetch('/api/auth/login', {
+    const response = await $fetch<{ user: { role: string } }>('/api/auth/login', {
       method: 'POST',
       body: {
         username: username.value,
         pin: pin.value,
       },
     })
+
+    if (!canAccessTarget(response.user?.role)) {
+      errorMessage.value = 'บัญชีนี้ไม่มีสิทธิ์เข้าหน้านี้'
+      return
+    }
 
     await navigateTo(redirectTarget.value)
   }

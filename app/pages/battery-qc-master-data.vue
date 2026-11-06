@@ -194,7 +194,7 @@ onMounted(loadSalesOrders)
           <h1 class="mt-1 text-3xl font-black tracking-tight text-slate-950">Sales Order Management</h1>
           <p class="mt-1 text-sm font-semibold text-slate-600">สร้าง SO ก่อน แล้วเพิ่ม Invoice จากรายการ SO ที่เกี่ยวข้อง</p>
         </div>
-        <UButton to="/battery-qc-admin" color="neutral" variant="outline" class="rounded-full">Back to Admin</UButton>
+        <UButton to="/qc-operation" color="neutral" variant="outline" class="rounded-full">Back to Admin</UButton>
       </header>
 
       <UAlert v-if="message" color="success" variant="soft" :title="message" :ui="{ root: 'rounded-[15px] border border-emerald-300 bg-emerald-50 text-emerald-950', title: 'font-black' }" />

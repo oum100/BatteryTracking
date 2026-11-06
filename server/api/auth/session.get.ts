@@ -1,7 +1,15 @@
-import { getCurrentUser } from '../../utils/user-auth'
+import { clearUserSession, getCurrentUser } from '../../utils/user-auth'
 
 export default defineEventHandler(async (event) => {
-  const user = await getCurrentUser(event)
+  let user = null
+
+  try {
+    user = await getCurrentUser(event)
+  }
+  catch {
+    clearUserSession(event)
+  }
+
   return {
     ok: true,
     authenticated: Boolean(user),

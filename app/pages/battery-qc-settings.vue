@@ -2,7 +2,7 @@
 definePageMeta({ middleware: "admin-auth" });
 useHead({ title: "Battery QC Settings" });
 
-type UserRole = "ADMIN" | "CALIBRATOR";
+type UserRole = "ADMIN" | "CALIBRATOR" | "OFFICER" | "STAFF";
 type SettingEntity = "user" | "channel" | "program";
 
 interface UserAccount {
@@ -51,6 +51,8 @@ const editor = reactive({
 const roleOptions = [
   { label: "Admin", value: "ADMIN" },
   { label: "Calibrator", value: "CALIBRATOR" },
+  { label: "Officer", value: "OFFICER" },
+  { label: "Staff", value: "STAFF" },
 ];
 
 const userColumns = [
@@ -176,6 +178,11 @@ function errorText(error: unknown, fallback: string) {
   return details.data?.statusMessage || details.statusMessage || fallback;
 }
 
+async function logoutAdmin() {
+  await $fetch('/api/admin/logout', { method: 'POST' })
+  await navigateTo('/')
+}
+
 async function saveEditor() {
   saving.value = true;
   message.value = "";
@@ -279,13 +286,17 @@ onMounted(loadSettings);
             Battery QC Settings
           </h1>
         </div>
-        <UButton
-          to="/battery-qc-admin"
-          color="neutral"
-          variant="outline"
-          class="rounded-full"
-          >Back to Admin</UButton
-        >
+        <div class="flex flex-wrap justify-end gap-2">
+          <UButton to="/qc-operation" color="neutral" variant="outline" class="rounded-full">
+            QC Operations
+          </UButton>
+          <UButton to="/battery-qc-system" color="neutral" variant="outline" class="rounded-full">
+            QC Job
+          </UButton>
+          <UButton color="neutral" variant="outline" class="rounded-full" @click="logoutAdmin">
+            Logout
+          </UButton>
+        </div>
       </header>
 
       <UAlert

@@ -3,7 +3,7 @@ import { parseDate } from '@internationalized/date'
 import type { DateValue } from '@internationalized/date'
 
 definePageMeta({
-  middleware: 'admin-auth',
+  middleware: 'qc-workspace-auth',
 })
 
 type ShipToFactory = 'AAT' | 'FTM'
@@ -81,6 +81,7 @@ interface AdminJobTableRow {
   viewState: AdminJobViewState
   viewStateLabel: string
   canDelete: boolean
+  reportReady: boolean
 }
 
 const salesOrders = ref<SalesOrderItem[]>([])
@@ -94,6 +95,8 @@ const currentPage = ref(1)
 const pageSize = ref(10)
 let currentDateTimeTimer: ReturnType<typeof setInterval> | null = null
 const colorMode = useColorMode()
+const { data: session } = await useFetch<{ user: { role: string } | null }>('/api/auth/session')
+const isAdmin = computed(() => session.value?.user?.role === 'ADMIN')
 
 const isCreateModalOpen = ref(false)
 const isUpdateModalOpen = ref(false)
@@ -372,6 +375,7 @@ const tableRows = computed<AdminJobTableRow[]>(() => jobs.value
       viewState,
       viewStateLabel: getJobViewStateLabel(viewState),
       canDelete: job.canDelete ?? false,
+      reportReady: true,
     }
   }))
 
@@ -655,7 +659,7 @@ async function logoutAdmin() {
     method: 'POST',
   })
 
-  await navigateTo('/admin-login')
+  await navigateTo('/')
 }
 
 async function runBulkAction(action: 'UPDATE' | 'DELETE' | 'SET_SHIPPED', payload: Record<string, any> = {}) {
@@ -861,17 +865,20 @@ onBeforeUnmount(() => {
 
           <div class="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
             <div class="space-y-1">
-              <h1 :class="['text-[1.8rem] font-black tracking-tight leading-none sm:text-[2.2rem]', headingClass]">Battery QC Admin</h1>
+              <h1 :class="['text-[1.8rem] font-black tracking-tight leading-none sm:text-[2.2rem]', headingClass]">QC Operations</h1>
             </div>
 
             <div class="flex flex-wrap justify-start gap-2 xl:justify-end">
               <UButton to="/battery-qc-system" :class="navSecondaryButtonClass">
-                Battery QC System
+                QC Job
               </UButton>
-              <UButton to="/battery-qc-master-data" :class="navSecondaryButtonClass">
-                Manage SO & Invoice
+              <UButton v-if="isAdmin" to="/qc-operation" :class="navSecondaryButtonClass">
+                QC Operations
               </UButton>
-              <UButton to="/battery-qc-employees" :class="navSecondaryButtonClass">
+              <UButton v-if="isAdmin" to="/battery-qc-settings" :class="navSecondaryButtonClass">
+                QC Setting
+              </UButton>
+              <UButton v-if="isAdmin" to="/battery-qc-employees" :class="navSecondaryButtonClass">
                 Manage Employees
               </UButton>
               <UButton :class="navPrimaryButtonClass" @click="openCreateModal">
@@ -1085,6 +1092,20 @@ onBeforeUnmount(() => {
             <template #actions-cell="{ row }">
               <div class="flex justify-end gap-1">
                 <UButton
+                  color="neutral"
+                  variant="ghost"
+                  icon="i-lucide-file-chart-column"
+                  :to="row.original.reportReady ? { path: '/qc-report', query: { jobId: row.original.id } } : undefined"
+                  :disabled="!row.original.reportReady"
+                  :title="'ดูรายงาน'"
+                  :aria-label="'ดูรายงาน'"
+                  :class="row.original.reportReady
+                    ? (isDarkMode
+                      ? 'rounded-full text-sky-300 hover:bg-sky-500/15 hover:text-sky-200'
+                      : 'rounded-full text-sky-700 hover:bg-sky-50 hover:text-sky-800')
+                    : 'rounded-full text-slate-400 opacity-60'"
+                />
+                <UButton
                   v-if="row.original.batchId"
                   color="neutral"
                   variant="ghost"
@@ -1102,8 +1123,8 @@ onBeforeUnmount(() => {
                   variant="ghost"
                   icon="i-lucide-rotate-ccw"
                   :disabled="isBusy"
-                  title="ล้างข้อมูล QC เพื่อให้ลบใบงานได้"
-                  aria-label="ล้างข้อมูล QC"
+                  title="ล้างข้อมูล"
+                  aria-label="ล้างข้อมูล"
                   :class="isDarkMode
                     ? 'rounded-full text-amber-300 hover:bg-amber-500/15 hover:text-amber-200'
                     : 'rounded-full text-amber-700 hover:bg-amber-50 hover:text-amber-800'"

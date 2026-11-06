@@ -10,6 +10,18 @@ export async function requireAdminSession(event: H3Event) {
   return await requireUserRole(event, ['ADMIN'])
 }
 
+export async function requireQcOperationsSession(event: H3Event) {
+  return await requireUserRole(event, ['ADMIN', 'OFFICER'])
+}
+
+export async function requireQcJobSession(event: H3Event) {
+  return await requireUserRole(event, ['ADMIN', 'STAFF'])
+}
+
+export async function requireQcWorkspaceSession(event: H3Event) {
+  return await requireUserRole(event, ['ADMIN', 'OFFICER', 'STAFF'])
+}
+
 export function clearAdminSession(event: H3Event) {
   clearUserSession(event)
 }

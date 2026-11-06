@@ -23,6 +23,7 @@ const TRANSIENT_CONNECTION_PATTERNS = [
   'Error in PostgreSQL connection: Error { kind: Closed, cause: None }',
   'Can\'t reach database server',
   'Timed out fetching a new connection from the connection pool',
+  'Engine is not yet connected',
 ]
 
 function isTransientPrismaConnectionError(error: unknown) {

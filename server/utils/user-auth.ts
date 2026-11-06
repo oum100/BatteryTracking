@@ -2,7 +2,7 @@ import { createHmac, randomBytes, scryptSync, timingSafeEqual } from 'node:crypt
 import type { H3Event } from 'h3'
 import { prisma } from './prisma'
 
-export const USER_ROLES = ['ADMIN', 'CALIBRATOR'] as const
+export const USER_ROLES = ['ADMIN', 'CALIBRATOR', 'OFFICER', 'STAFF'] as const
 export type UserRole = typeof USER_ROLES[number]
 
 const SESSION_COOKIE = 'battery_user_session'

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+definePageMeta({ middleware: 'qc-workspace-auth' })
 interface BatteryJobSlot {
   slotNumber: number
   batteryId: string
@@ -225,7 +226,7 @@ async function exportPdf() {
             <p class="mt-1 text-sm font-semibold text-slate-600">สรุปผล QC ของทุก Rack ใน Group เดียวกัน</p>
           </div>
           <div class="flex flex-wrap gap-2">
-            <UButton to="/battery-qc-admin" color="neutral" variant="soft" icon="i-lucide-briefcase-business" class="rounded-full border border-rose-200 bg-rose-50 px-4 text-rose-900 hover:bg-rose-100">Admin</UButton>
+            <UButton to="/qc-operation" color="neutral" variant="soft" icon="i-lucide-briefcase-business" class="rounded-full border border-rose-200 bg-rose-50 px-4 text-rose-900 hover:bg-rose-100">Admin</UButton>
             <UButton color="neutral" variant="soft" icon="i-lucide-file-spreadsheet" :loading="isExportingExcel" :disabled="!selectedJobs.length" class="rounded-full border border-emerald-200 bg-emerald-50 px-4 text-emerald-900 hover:bg-emerald-100" @click="exportExcel">Export Excel</UButton>
             <UButton color="neutral" variant="soft" icon="i-lucide-file-text" :loading="isExportingPdf" :disabled="!selectedJobs.length" class="rounded-full border border-sky-200 bg-sky-50 px-4 text-sky-900 hover:bg-sky-100" @click="exportPdf">Export PDF</UButton>
             <UButton color="neutral" variant="soft" icon="i-lucide-refresh-cw" class="rounded-full border border-amber-200 bg-amber-50 px-4 text-amber-900 hover:bg-amber-100" @click="refresh">Refresh</UButton>

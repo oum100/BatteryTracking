@@ -35,6 +35,8 @@ enum ShipToFactory {
 enum UserRole {
   ADMIN
   CALIBRATOR
+  OFFICER
+  STAFF
 }
 
 enum VoltMeterCalibrationSource {
